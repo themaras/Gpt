@@ -5,6 +5,8 @@
         android:text="Poker Capture" android:textSize="28sp" android:textStyle="bold" />
     <TextView android:id="@+id/status" android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:text="Stopped" android:textSize="18sp" android:layout_marginTop="18dp" />
+    <TextView android:id="@+id/frames" android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:text="Frames saved: 0" android:textSize="18sp" android:layout_marginTop="10dp" />
     <Button android:id="@+id/startButton" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:text="START CAPTURE" android:layout_marginTop="28dp" />
     <Button android:id="@+id/stopButton" android:layout_width="match_parent" android:layout_height="wrap_content"

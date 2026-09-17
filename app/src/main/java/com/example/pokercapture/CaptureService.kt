@@ -9,6 +9,8 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import java.io.File
 import java.io.FileOutputStream
@@ -26,6 +28,7 @@ class CaptureService : Service() {
     private var reader: ImageReader? = null
     private var lastSignature: Long? = null
     private var lastSavedAt = 0L
+    private var projectionCallback: MediaProjection.Callback? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
@@ -50,6 +53,15 @@ class CaptureService : Service() {
             intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)!! else intent.getParcelableExtra(EXTRA_DATA)!!
         val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projection = mgr.getMediaProjection(code, data)
+        projectionCallback = object : MediaProjection.Callback() {
+            override fun onStop() {
+                reader?.close()
+                reader = null
+                projection = null
+                stopSelf()
+            }
+        }
+        projection!!.registerCallback(projectionCallback!!, Handler(Looper.getMainLooper()))
         val dm = resources.displayMetrics
         val width = dm.widthPixels
         val height = dm.heightPixels
@@ -92,6 +104,11 @@ class CaptureService : Service() {
         val dir = File(getExternalFilesDir(null), "frames").apply { mkdirs() }
         FileOutputStream(File(dir, "frame_$ts.jpg")).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 88, it) }
     }
-    private fun stopCapture() { reader?.close(); reader = null; projection?.stop(); projection = null }
+    private fun stopCapture() {
+        reader?.close(); reader = null
+        projectionCallback?.let { callback -> projection?.unregisterCallback(callback) }
+        projectionCallback = null
+        projection?.stop(); projection = null
+    }
     override fun onDestroy() { stopCapture(); super.onDestroy() }
 }

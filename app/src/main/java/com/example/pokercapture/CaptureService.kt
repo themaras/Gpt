@@ -2,6 +2,7 @@ package com.example.pokercapture
 
 import android.app.*
 import android.content.Intent
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
@@ -9,6 +10,8 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.IBinder
+import android.provider.MediaStore
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import androidx.core.app.NotificationCompat
@@ -154,8 +157,25 @@ class CaptureService : Service() {
         } finally { image.close() }
     }
     private fun saveFrame(bitmap: Bitmap, ts: Long) {
-        val dir = File(getExternalFilesDir(null), "frames").apply { mkdirs() }
-        FileOutputStream(File(dir, "frame_$ts.jpg")).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "PokerCapture_$ts.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/PokerCapture")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+        }
+        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return
+        try {
+            contentResolver.openOutputStream(uri)?.use {
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 88, it)
+            } ?: throw IllegalStateException("Could not open MediaStore output stream")
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+            val prefs = getSharedPreferences("capture", MODE_PRIVATE)
+            prefs.edit().putInt("frames_saved", prefs.getInt("frames_saved", 0) + 1).apply()
+        } catch (e: Exception) {
+            contentResolver.delete(uri, null, null)
+        }
     }
     private fun stopCapture() {
         reader?.close(); reader = null

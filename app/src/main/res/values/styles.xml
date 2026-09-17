@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.PokerCapture" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+        <item name="android:fontFamily">sans</item>
+    </style>
+</resources>

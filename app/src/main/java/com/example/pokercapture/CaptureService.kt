@@ -116,31 +116,31 @@ class CaptureService : Service() {
             }
             val tablePresent = total > 0 && green.toDouble() / total > 0.18
 
-            // Hero-turn trigger: the poker client shows large bright action buttons
-            // in the bottom action area only when Hero can act. Detect that region
-            // and save once on the transition hidden -> visible.
-            var actionLike = 0
-            var actionTotal = 0
-            var ay = (clean.height * 0.78).toInt()
-            val ay1 = (clean.height * 0.94).toInt()
+            // Hero-turn trigger calibrated from the supplied 832x1852 screenshots.
+            // Only inspect the large bottom decision buttons (Fold / Check / Call / Bet / Raise).
+            var buttonPixels = 0
+            var buttonTotal = 0
+            var ay = (clean.height * 0.875).toInt()
+            val ay1 = (clean.height * 0.935).toInt()
             while (ay < ay1) {
-                var ax = (clean.width * 0.05).toInt()
-                val ax1 = (clean.width * 0.95).toInt()
+                var ax = (clean.width * 0.03).toInt()
+                val ax1 = (clean.width * 0.97).toInt()
                 while (ax < ax1) {
                     val p = clean.getPixel(ax, ay)
                     val rr = (p shr 16) and 255
                     val gg = (p shr 8) and 255
                     val bb = p and 255
-                    val maxc = maxOf(rr, gg, bb)
-                    val minc = minOf(rr, gg, bb)
-                    if (maxc > 105 && (maxc - minc > 35 || rr + gg + bb > 480)) actionLike++
-                    actionTotal++
-                    ax += 20
+                    // Poker action buttons are strongly saturated blue/green/orange/red or dark-gray Fold.
+                    val saturated = maxOf(rr, gg, bb) - minOf(rr, gg, bb) > 55 && maxOf(rr, gg, bb) > 105
+                    val foldGray = rr in 45..115 && gg in 45..115 && bb in 45..125 && kotlin.math.abs(rr - gg) < 25
+                    if (saturated || foldGray) buttonPixels++
+                    buttonTotal++
+                    ax += 12
                 }
-                ay += 20
+                ay += 12
             }
-            val heroActionVisible = tablePresent && actionTotal > 0 &&
-                actionLike.toDouble() / actionTotal > 0.055
+            val heroActionVisible = tablePresent && buttonTotal > 0 &&
+                buttonPixels.toDouble() / buttonTotal > 0.20
 
             if (heroActionVisible && !heroActionWasVisible && now - lastSavedAt > 900) {
                 saveFrame(clean, now)

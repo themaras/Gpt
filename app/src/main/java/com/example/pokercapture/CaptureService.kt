@@ -95,6 +95,7 @@ class CaptureService : Service() {
             val now = System.currentTimeMillis()
             if (old == null || (abs(sig - old) > 1200 && now - lastSavedAt > 1200)) {
                 saveFrame(clean, now); lastSavedAt = now
+                sendBroadcast(Intent("com.example.pokercapture.FRAME_SAVED").setPackage(packageName))
             }
             lastSignature = sig
             clean.recycle()

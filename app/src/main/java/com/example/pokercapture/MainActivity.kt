@@ -26,9 +26,13 @@ class MainActivity : AppCompatActivity() {
         } else status.text = "Permission denied"
     }
     private fun refreshFrameCount() {
-        val dir = java.io.File(getExternalFilesDir(null), "frames")
-        val count = dir.listFiles { f -> f.extension.equals("jpg", true) }?.size ?: 0
-        frames.text = "Frames saved: $count"
+        val prefs = getSharedPreferences("capture", MODE_PRIVATE)
+        if (!prefs.contains("frames_saved")) {
+            val oldDir = java.io.File(getExternalFilesDir(null), "frames")
+            val oldCount = oldDir.listFiles { file -> file.extension.equals("jpg", true) }?.size ?: 0
+            prefs.edit().putInt("frames_saved", oldCount).apply()
+        }
+        frames.text = "Frames saved: " + prefs.getInt("frames_saved", 0)
     }
     override fun onResume() { super.onResume(); refreshFrameCount() }
     override fun onCreate(savedInstanceState: Bundle?) {

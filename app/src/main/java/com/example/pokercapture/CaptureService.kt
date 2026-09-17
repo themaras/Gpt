@@ -28,6 +28,7 @@ class CaptureService : Service() {
     private var reader: ImageReader? = null
     private var lastSignature: Long? = null
     private var lastSavedAt = 0L
+    private var tableWasPresent = false
     private var projectionCallback: MediaProjection.Callback? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -91,13 +92,35 @@ class CaptureService : Service() {
                 y += 48
             }
             sig /= samples.coerceAtLeast(1)
-            val old = lastSignature
             val now = System.currentTimeMillis()
-            if (old == null || (abs(sig - old) > 1200 && now - lastSavedAt > 1200)) {
+            // Guard: only save when the PokerStars table is likely visible.
+            // Detect the stable green felt in the central table area; navigating to other apps should fail this test.
+            var green = 0
+            var total = 0
+            var gy = (clean.height * 0.28).toInt()
+            val gy1 = (clean.height * 0.68).toInt()
+            while (gy < gy1) {
+                var gx = (clean.width * 0.12).toInt()
+                val gx1 = (clean.width * 0.88).toInt()
+                while (gx < gx1) {
+                    val p = clean.getPixel(gx, gy)
+                    val rr = (p shr 16) and 255
+                    val gg = (p shr 8) and 255
+                    val bb = p and 255
+                    if (gg > rr * 1.18 && gg > bb * 1.12 && gg > 45) green++
+                    total++
+                    gx += 32
+                }
+                gy += 32
+            }
+            val tablePresent = total > 0 && green.toDouble() / total > 0.18
+            val old = lastSignature
+            if (tablePresent && (old == null || !tableWasPresent || (abs(sig - old) > 1200 && now - lastSavedAt > 1200))) {
                 saveFrame(clean, now); lastSavedAt = now
                 sendBroadcast(Intent("com.example.pokercapture.FRAME_SAVED").setPackage(packageName))
             }
-            lastSignature = sig
+            tableWasPresent = tablePresent
+            if (tablePresent) lastSignature = sig
             clean.recycle()
         } finally { image.close() }
     }

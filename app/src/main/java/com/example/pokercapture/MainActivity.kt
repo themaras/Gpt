@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
+    private lateinit var frames: TextView
     private val captureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val i = Intent(this, CaptureService::class.java).apply {
@@ -21,12 +22,20 @@ class MainActivity : AppCompatActivity() {
             }
             startForegroundService(i)
             status.text = "Capturing"
+            refreshFrameCount()
         } else status.text = "Permission denied"
     }
+    private fun refreshFrameCount() {
+        val dir = java.io.File(getExternalFilesDir(null), "frames")
+        val count = dir.listFiles { f -> f.extension.equals("jpg", true) }?.size ?: 0
+        frames.text = "Frames saved: $count"
+    }
+    override fun onResume() { super.onResume(); refreshFrameCount() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
+        frames = findViewById(R.id.frames)
         findViewById<Button>(R.id.startButton).setOnClickListener {
             val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             captureLauncher.launch(mgr.createScreenCaptureIntent())

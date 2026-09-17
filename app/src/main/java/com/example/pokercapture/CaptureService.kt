@@ -29,6 +29,7 @@ class CaptureService : Service() {
     private var lastSignature: Long? = null
     private var lastSavedAt = 0L
     private var tableWasPresent = false
+    private var heroActionWasVisible = false
     private var projectionCallback: MediaProjection.Callback? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -114,11 +115,39 @@ class CaptureService : Service() {
                 gy += 32
             }
             val tablePresent = total > 0 && green.toDouble() / total > 0.18
-            val old = lastSignature
-            if (tablePresent && (old == null || !tableWasPresent || (abs(sig - old) > 1200 && now - lastSavedAt > 1200))) {
-                saveFrame(clean, now); lastSavedAt = now
+
+            // Hero-turn trigger: the poker client shows large bright action buttons
+            // in the bottom action area only when Hero can act. Detect that region
+            // and save once on the transition hidden -> visible.
+            var actionLike = 0
+            var actionTotal = 0
+            var ay = (clean.height * 0.78).toInt()
+            val ay1 = (clean.height * 0.94).toInt()
+            while (ay < ay1) {
+                var ax = (clean.width * 0.05).toInt()
+                val ax1 = (clean.width * 0.95).toInt()
+                while (ax < ax1) {
+                    val p = clean.getPixel(ax, ay)
+                    val rr = (p shr 16) and 255
+                    val gg = (p shr 8) and 255
+                    val bb = p and 255
+                    val maxc = maxOf(rr, gg, bb)
+                    val minc = minOf(rr, gg, bb)
+                    if (maxc > 105 && (maxc - minc > 35 || rr + gg + bb > 480)) actionLike++
+                    actionTotal++
+                    ax += 20
+                }
+                ay += 20
+            }
+            val heroActionVisible = tablePresent && actionTotal > 0 &&
+                actionLike.toDouble() / actionTotal > 0.055
+
+            if (heroActionVisible && !heroActionWasVisible && now - lastSavedAt > 900) {
+                saveFrame(clean, now)
+                lastSavedAt = now
                 sendBroadcast(Intent("com.example.pokercapture.FRAME_SAVED").setPackage(packageName))
             }
+            heroActionWasVisible = heroActionVisible
             tableWasPresent = tablePresent
             if (tablePresent) lastSignature = sig
             clean.recycle()

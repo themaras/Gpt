@@ -1,0 +1,97 @@
+package com.example.pokercapture
+
+import android.app.*
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
+import android.media.ImageReader
+import android.media.projection.MediaProjection
+import android.media.projection.MediaProjectionManager
+import android.os.IBinder
+import androidx.core.app.NotificationCompat
+import java.io.File
+import java.io.FileOutputStream
+import kotlin.math.abs
+
+class CaptureService : Service() {
+    companion object {
+        const val ACTION_START = "capture.start"
+        const val ACTION_STOP = "capture.stop"
+        const val EXTRA_RESULT_CODE = "resultCode"
+        const val EXTRA_DATA = "data"
+        const val CHANNEL = "capture"
+    }
+    private var projection: MediaProjection? = null
+    private var reader: ImageReader? = null
+    private var lastSignature: Long? = null
+    private var lastSavedAt = 0L
+
+    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onCreate() {
+        super.onCreate()
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(CHANNEL, "Screen capture", NotificationManager.IMPORTANCE_LOW))
+    }
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) { stopCapture(); stopSelf(); return START_NOT_STICKY }
+        if (intent?.action == ACTION_START) {
+            startForeground(1, NotificationCompat.Builder(this, CHANNEL)
+                .setContentTitle("Poker Capture").setContentText("Screen capture active")
+                .setSmallIcon(android.R.drawable.ic_menu_camera).build())
+            startCapture(intent)
+        }
+        return START_NOT_STICKY
+    }
+    @Suppress("DEPRECATION")
+    private fun startCapture(intent: Intent) {
+        val code = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
+        val data: Intent = if (android.os.Build.VERSION.SDK_INT >= 33)
+            intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)!! else intent.getParcelableExtra(EXTRA_DATA)!!
+        val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        projection = mgr.getMediaProjection(code, data)
+        val dm = resources.displayMetrics
+        val width = dm.widthPixels
+        val height = dm.heightPixels
+        reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+        projection!!.createVirtualDisplay("PokerCapture", width, height, dm.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader!!.surface, null, null)
+        reader!!.setOnImageAvailableListener({ r -> processFrame(r) }, null)
+    }
+    private fun processFrame(r: ImageReader) {
+        val image = r.acquireLatestImage() ?: return
+        try {
+            val plane = image.planes[0]
+            val buffer = plane.buffer
+            val pixelStride = plane.pixelStride
+            val rowStride = plane.rowStride
+            val rowPadding = rowStride - pixelStride * image.width
+            val bmp = Bitmap.createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
+            bmp.copyPixelsFromBuffer(buffer)
+            val clean = Bitmap.createBitmap(bmp, 0, 0, image.width, image.height)
+            bmp.recycle()
+            val x0 = (clean.width * 0.08).toInt(); val x1 = (clean.width * 0.92).toInt()
+            val y0 = (clean.height * 0.18).toInt(); val y1 = (clean.height * 0.72).toInt()
+            var sig = 0L; var samples = 0; var y = y0
+            while (y < y1) {
+                var x = x0
+                while (x < x1) { sig += clean.getPixel(x, y).toLong() and 0x00FFFFFF; samples++; x += 48 }
+                y += 48
+            }
+            sig /= samples.coerceAtLeast(1)
+            val old = lastSignature
+            val now = System.currentTimeMillis()
+            if (old == null || (abs(sig - old) > 1200 && now - lastSavedAt > 1200)) {
+                saveFrame(clean, now); lastSavedAt = now
+            }
+            lastSignature = sig
+            clean.recycle()
+        } finally { image.close() }
+    }
+    private fun saveFrame(bitmap: Bitmap, ts: Long) {
+        val dir = File(getExternalFilesDir(null), "frames").apply { mkdirs() }
+        FileOutputStream(File(dir, "frame_$ts.jpg")).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+    }
+    private fun stopCapture() { reader?.close(); reader = null; projection?.stop(); projection = null }
+    override fun onDestroy() { stopCapture(); super.onDestroy() }
+}

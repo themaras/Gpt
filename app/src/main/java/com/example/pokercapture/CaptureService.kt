@@ -179,10 +179,14 @@ class CaptureService : Service() {
         } finally { image.close() }
     }
     private fun saveFrame(bitmap: Bitmap, ts: Long) {
-        // In split-screen the poker table is on the left. Save only that half,
-        // then downscale/compress more aggressively to keep uploads small.
-        val halfWidth = (bitmap.width / 2).coerceAtLeast(1)
-        val half = Bitmap.createBitmap(bitmap, 0, 0, halfWidth, bitmap.height)
+        // Crop according to the user's tablet/split-screen orientation preference.
+        val cropMode = getSharedPreferences("capture", MODE_PRIVATE).getString("crop_mode", "RIGHT") ?: "RIGHT"
+        val half = when (cropMode) {
+            "LEFT" -> Bitmap.createBitmap(bitmap, 0, 0, (bitmap.width / 2).coerceAtLeast(1), bitmap.height)
+            "TOP" -> Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, (bitmap.height / 2).coerceAtLeast(1))
+            "BOTTOM" -> Bitmap.createBitmap(bitmap, 0, bitmap.height / 2, bitmap.width, (bitmap.height - bitmap.height / 2).coerceAtLeast(1))
+            else -> Bitmap.createBitmap(bitmap, bitmap.width / 2, 0, (bitmap.width - bitmap.width / 2).coerceAtLeast(1), bitmap.height)
+        }
         val targetWidth = (half.width * 0.70f).toInt().coerceAtLeast(1)
         val targetHeight = (half.height * 0.70f).toInt().coerceAtLeast(1)
         val output = Bitmap.createScaledBitmap(half, targetWidth, targetHeight, true)

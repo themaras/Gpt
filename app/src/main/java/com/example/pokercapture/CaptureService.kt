@@ -2,6 +2,10 @@ package com.example.pokercapture
 
 import android.app.*
 import android.content.Intent
+import android.database.ContentObserver
+import android.net.Uri
+import android.provider.MediaStore
+import android.content.ContentUris
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
@@ -33,11 +37,14 @@ class CaptureService : Service() {
     private var lastSavedAt = 0L
     private var tableWasPresent = false
     private var heroActionWasVisible = false
+    private var screenshotObserver: ContentObserver? = null
+    private var lastScreenshotId = -1L
     private var projectionCallback: MediaProjection.Callback? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
         super.onCreate()
+        startScreenshotWatcher()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, "Screen capture", NotificationManager.IMPORTANCE_LOW))
     }
@@ -183,5 +190,45 @@ class CaptureService : Service() {
         projectionCallback = null
         projection?.stop(); projection = null
     }
-    override fun onDestroy() { stopCapture(); super.onDestroy() }
+    override fun onDestroy() {
+        stopScreenshotWatcher() stopCapture(); super.onDestroy() }
+    private fun startScreenshotWatcher() {
+        if (screenshotObserver != null) return
+        screenshotObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                super.onChange(selfChange, uri)
+                shareLatestScreenshotToChatGPT()
+            }
+        }
+        contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, screenshotObserver!!)
+    }
+
+    private fun stopScreenshotWatcher() {
+        screenshotObserver?.let { try { contentResolver.unregisterContentObserver(it) } catch (_: Exception) {} }
+        screenshotObserver = null
+    }
+
+    private fun shareLatestScreenshotToChatGPT() {
+        val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.RELATIVE_PATH)
+        contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, null, null, MediaStore.Images.Media.DATE_ADDED + " DESC")?.use { cur ->
+            if (!cur.moveToFirst()) return
+            val id = cur.getLong(0)
+            val name = cur.getString(1) ?: ""
+            val rel = cur.getString(2) ?: ""
+            if (id == lastScreenshotId || (!name.contains("screenshot", true) && !rel.contains("screenshot", true))) return
+            lastScreenshotId = id
+            val imageUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "image/*"
+                putExtra(Intent.EXTRA_STREAM, imageUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                setPackage("com.openai.chatgpt")
+            }
+            try { startActivity(send) } catch (_: Exception) {
+                send.setPackage(null)
+                startActivity(Intent.createChooser(send, "Send screenshot").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        }
+    }
+
 }

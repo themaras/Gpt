@@ -13,6 +13,7 @@ import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.Toast
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.media.ImageReader
@@ -254,28 +255,16 @@ class CaptureService : Service() {
                 arrayOf("PokerCapture_$ts.jpg"), null)?.use { cur ->
                 if (cur.moveToFirst()) ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cur.getLong(0)) else null
             } ?: return
-            if (ChatGptAccessibilityService.isRunning()) {
-                // Open ChatGPT normally so Android restores the conversation that is already
-                // open instead of ACTION_SEND creating a fresh chat every time.
-                val launch = packageManager.getLaunchIntentForPackage("com.openai.chatgpt")
-                if (launch != null) {
-                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                    startActivity(launch)
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        ChatGptAccessibilityService.attachAndSend()
-                    }, 60)
-                }
-            } else {
-                // Safe fallback until the user enables Poker Capture in Accessibility settings.
-                val send = Intent(Intent.ACTION_SEND).apply {
-                    type = "image/*"; putExtra(Intent.EXTRA_STREAM, uri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); setPackage("com.openai.chatgpt")
-                }
-                try {
-                    startActivity(send.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } catch (_: Exception) {
-                    send.setPackage(null)
-                    startActivity(Intent.createChooser(send, "Send capture").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            // Never use ACTION_SEND here: ChatGPT treats that as a new-share flow and can
+            // create a fresh conversation. Accessibility works directly against the ChatGPT
+            // window that is already open in split-screen, preserving the current chat.
+            if (!ChatGptAccessibilityService.attachAndSend()) {
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(
+                        this,
+                        "Poker Capture accessibility is not active",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
         } finally {

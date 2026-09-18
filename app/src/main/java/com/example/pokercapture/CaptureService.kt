@@ -255,18 +255,40 @@ class CaptureService : Service() {
                 arrayOf("PokerCapture_$ts.jpg"), null)?.use { cur ->
                 if (cur.moveToFirst()) ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cur.getLong(0)) else null
             } ?: return
-            // Never use ACTION_SEND here: ChatGPT treats that as a new-share flow and can
-            // create a fresh conversation. Accessibility works directly against the ChatGPT
-            // window that is already open in split-screen, preserving the current chat.
-            if (!ChatGptAccessibilityService.attachAndSend()) {
-                Handler(Looper.getMainLooper()).post {
-                    Toast.makeText(
-                        this,
-                        "Poker Capture accessibility is not active",
-                        Toast.LENGTH_SHORT
-                    ).show()
+            // Hybrid flow: try the same-chat accessibility path first, but never leave
+            // the user with a dead CAP button. If accessibility does not complete the send
+            // quickly, fall back to the old reliable Android share path.
+            val startedAt = System.currentTimeMillis()
+            val accessibilityStarted = ChatGptAccessibilityService.attachAndSend()
+
+            Handler(Looper.getMainLooper()).postDelayed({
+                val completed = ChatGptAccessibilityService.lastCompletedAt() >= startedAt
+                if (!completed) {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "image/*"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        setPackage("com.openai.chatgpt")
+                    }
+                    try {
+                        startActivity(send.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    } catch (_: Exception) {
+                        send.setPackage(null)
+                        startActivity(
+                            Intent.createChooser(send, "Send capture")
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+
+                    if (!accessibilityStarted) {
+                        Toast.makeText(
+                            this,
+                            "Same-chat accessibility unavailable; used normal share",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
                 }
-            }
+            }, 1400)
         } finally {
             clean.recycle()
         }

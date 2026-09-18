@@ -254,15 +254,29 @@ class CaptureService : Service() {
                 arrayOf("PokerCapture_$ts.jpg"), null)?.use { cur ->
                 if (cur.moveToFirst()) ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cur.getLong(0)) else null
             } ?: return
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "image/*"; putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); setPackage("com.openai.chatgpt")
-            }
-            try {
-                startActivity(send.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            } catch (_: Exception) {
-                send.setPackage(null)
-                startActivity(Intent.createChooser(send, "Send capture").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            if (ChatGptAccessibilityService.isRunning()) {
+                // Open ChatGPT normally so Android restores the conversation that is already
+                // open instead of ACTION_SEND creating a fresh chat every time.
+                val launch = packageManager.getLaunchIntentForPackage("com.openai.chatgpt")
+                if (launch != null) {
+                    launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    startActivity(launch)
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        ChatGptAccessibilityService.attachAndSend()
+                    }, 60)
+                }
+            } else {
+                // Safe fallback until the user enables Poker Capture in Accessibility settings.
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "image/*"; putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); setPackage("com.openai.chatgpt")
+                }
+                try {
+                    startActivity(send.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } catch (_: Exception) {
+                    send.setPackage(null)
+                    startActivity(Intent.createChooser(send, "Send capture").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
             }
         } finally {
             clean.recycle()

@@ -337,18 +337,34 @@ class ChatGptAccessibilityService : AccessibilityService() {
     private fun tapSplitChatPlus(): Boolean {
         val dm = resources.displayMetrics
         val density = dm.density
-        // User layout: PokerStars left, ChatGPT right. Tap the + at the lower-left
-        // of the right pane. Insets are deliberately generous for HyperOS navigation bars.
-        val x = (dm.widthPixels / 2f) + (34f * density)
-        val y = dm.heightPixels - (58f * density)
+        val mode = getSharedPreferences("capture", MODE_PRIVATE)
+            .getString("crop_mode", "RIGHT") ?: "RIGHT"
+
+        // The selected capture side is where PokerStars is.
+        // ChatGPT is assumed to be in the opposite half of the split screen.
+        val (x, y) = when (mode) {
+            "LEFT" -> Pair(dm.widthPixels / 2f + 34f * density, dm.heightPixels - 58f * density)
+            "RIGHT" -> Pair(34f * density, dm.heightPixels - 58f * density)
+            "TOP" -> Pair(34f * density, dm.heightPixels / 2f + (dm.heightPixels / 2f) - 58f * density)
+            "BOTTOM" -> Pair(34f * density, dm.heightPixels / 2f - 58f * density)
+            else -> Pair(34f * density, dm.heightPixels - 58f * density)
+        }
         return tap(x, y)
     }
 
     private fun tapSplitChatSend(): Boolean {
         val dm = resources.displayMetrics
         val density = dm.density
-        val x = dm.widthPixels - (36f * density)
-        val y = dm.heightPixels - (58f * density)
+        val mode = getSharedPreferences("capture", MODE_PRIVATE)
+            .getString("crop_mode", "RIGHT") ?: "RIGHT"
+
+        val (x, y) = when (mode) {
+            "LEFT" -> Pair(dm.widthPixels - 36f * density, dm.heightPixels - 58f * density)
+            "RIGHT" -> Pair(dm.widthPixels / 2f - 36f * density, dm.heightPixels - 58f * density)
+            "TOP" -> Pair(dm.widthPixels - 36f * density, dm.heightPixels - 58f * density)
+            "BOTTOM" -> Pair(dm.widthPixels - 36f * density, dm.heightPixels / 2f - 58f * density)
+            else -> Pair(dm.widthPixels / 2f - 36f * density, dm.heightPixels - 58f * density)
+        }
         return tap(x, y)
     }
 

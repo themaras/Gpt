@@ -6,6 +6,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.widget.Toast
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -74,9 +75,18 @@ class ChatGptAccessibilityService : AccessibilityService() {
         step = Step.FIND_ATTACH
         retries = 0
 
-        // Do not launch ChatGPT. In split-screen we operate on the already-open ChatGPT window,
-        // which preserves the current conversation.
-        handler.postDelayed({ findAndClickAttach() }, 80)
+        // First use a real screen tap in the RIGHT split-screen pane. ChatGPT's current
+        // Android composer can hide the + control from the accessibility node tree, but
+        // gestures still work. This also gives focus to the already-open conversation.
+        handler.postDelayed({
+            if (tapSplitChatPlus()) {
+                step = Step.FIND_MEDIA
+                retries = 0
+                handler.postDelayed({ findAndClickMediaOption() }, 160)
+            } else {
+                findAndClickAttach()
+            }
+        }, 80)
     }
 
     private fun findAndClickAttach() {
@@ -226,7 +236,7 @@ class ChatGptAccessibilityService : AccessibilityService() {
         }
 
         retries++
-        if (retries >= 3 && tapChatComposerEdge(root, leftSide = false)) {
+        if (retries >= 3 && (tapChatComposerEdge(root, leftSide = false) || tapSplitChatSend())) {
             cancelFlow()
         } else if (retries < 12) {
             handler.postDelayed({ sendInChat() }, 100)
@@ -322,6 +332,24 @@ class ChatGptAccessibilityService : AccessibilityService() {
             .distinctBy { System.identityHashCode(it.first) }
             .sortedWith(compareBy<Pair<AccessibilityNodeInfo, Rect>> { it.second.top }.thenBy { it.second.left })
             .firstOrNull()?.first
+    }
+
+    private fun tapSplitChatPlus(): Boolean {
+        val dm = resources.displayMetrics
+        val density = dm.density
+        // User layout: PokerStars left, ChatGPT right. Tap the + at the lower-left
+        // of the right pane. Insets are deliberately generous for HyperOS navigation bars.
+        val x = (dm.widthPixels / 2f) + (34f * density)
+        val y = dm.heightPixels - (58f * density)
+        return tap(x, y)
+    }
+
+    private fun tapSplitChatSend(): Boolean {
+        val dm = resources.displayMetrics
+        val density = dm.density
+        val x = dm.widthPixels - (36f * density)
+        val y = dm.heightPixels - (58f * density)
+        return tap(x, y)
     }
 
     private fun tapChatComposerEdge(root: AccessibilityNodeInfo, leftSide: Boolean): Boolean {

@@ -16,6 +16,8 @@
         <RadioButton android:id="@+id/cropTop" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Top" />
         <RadioButton android:id="@+id/cropBottom" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Bottom" />
     </RadioGroup>
+    <Button android:id="@+id/accessibilityButton" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:text="ENABLE AUTO-SEND / SAME CHAT" android:layout_marginTop="18dp" />
     <Button android:id="@+id/startButton" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:text="START CAPTURE" android:layout_marginTop="28dp" />
     <Button android:id="@+id/stopButton" android:layout_width="match_parent" android:layout_height="wrap_content"

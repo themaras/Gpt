@@ -101,6 +101,23 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         status = findViewById(R.id.status)
         frames = findViewById(R.id.frames)
+        val cropGroup = findViewById<android.widget.RadioGroup>(R.id.cropGroup)
+        val prefs = getSharedPreferences("capture", MODE_PRIVATE)
+        when (prefs.getString("crop_mode", "RIGHT")) {
+            "LEFT" -> findViewById<android.widget.RadioButton>(R.id.cropLeft).isChecked = true
+            "TOP" -> findViewById<android.widget.RadioButton>(R.id.cropTop).isChecked = true
+            "BOTTOM" -> findViewById<android.widget.RadioButton>(R.id.cropBottom).isChecked = true
+            else -> findViewById<android.widget.RadioButton>(R.id.cropRight).isChecked = true
+        }
+        cropGroup.setOnCheckedChangeListener { _, checkedId ->
+            val mode = when (checkedId) {
+                R.id.cropLeft -> "LEFT"
+                R.id.cropTop -> "TOP"
+                R.id.cropBottom -> "BOTTOM"
+                else -> "RIGHT"
+            }
+            prefs.edit().putString("crop_mode", mode).apply()
+        }
         findViewById<Button>(R.id.startButton).setOnClickListener {
             if (!Settings.canDrawOverlays(this)) {
                 waitingForOverlayPermission = true

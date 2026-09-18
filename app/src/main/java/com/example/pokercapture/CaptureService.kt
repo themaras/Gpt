@@ -14,7 +14,6 @@ import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.IBinder
-import android.provider.MediaStore
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
@@ -191,7 +190,7 @@ class CaptureService : Service() {
         projection?.stop(); projection = null
     }
     override fun onDestroy() {
-        stopScreenshotWatcher() stopCapture(); super.onDestroy() }
+        stopScreenshotWatcher(); stopCapture(); super.onDestroy() }
     private fun startScreenshotWatcher() {
         if (screenshotObserver != null) return
         screenshotObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {

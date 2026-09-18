@@ -21,6 +21,7 @@ class ChatGptAccessibilityService : AccessibilityService() {
         }
 
         fun isRunning(): Boolean = instance != null
+        private const val CHATGPT_PACKAGE = "com.openai.chatgpt"
     }
 
     private enum class Step { IDLE, FIND_ATTACH, FIND_MEDIA, PICK_IMAGE, WAIT_RETURN, SEND }
@@ -361,7 +362,4 @@ class ChatGptAccessibilityService : AccessibilityService() {
             p.contains("gallery")
     }
 
-    private companion object Constants {
-        const val CHATGPT_PACKAGE = "com.openai.chatgpt"
-    }
 }

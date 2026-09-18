@@ -118,6 +118,9 @@ class MainActivity : AppCompatActivity() {
             }
             prefs.edit().putString("crop_mode", mode).apply()
         }
+        findViewById<Button>(R.id.accessibilityButton).setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
         findViewById<Button>(R.id.startButton).setOnClickListener {
             if (!Settings.canDrawOverlays(this)) {
                 waitingForOverlayPermission = true

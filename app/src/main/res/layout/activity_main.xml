@@ -7,6 +7,15 @@
         android:text="Stopped" android:textSize="18sp" android:layout_marginTop="18dp" />
     <TextView android:id="@+id/frames" android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:text="Frames saved: 0" android:textSize="18sp" android:layout_marginTop="10dp" />
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:text="Screenshot half" android:textSize="16sp" android:layout_marginTop="18dp" />
+    <RadioGroup android:id="@+id/cropGroup" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center">
+        <RadioButton android:id="@+id/cropLeft" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Left" />
+        <RadioButton android:id="@+id/cropRight" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Right" />
+        <RadioButton android:id="@+id/cropTop" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Top" />
+        <RadioButton android:id="@+id/cropBottom" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Bottom" />
+    </RadioGroup>
     <Button android:id="@+id/startButton" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:text="START CAPTURE" android:layout_marginTop="28dp" />
     <Button android:id="@+id/stopButton" android:layout_width="match_parent" android:layout_height="wrap_content"

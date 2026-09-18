@@ -6,6 +6,7 @@ import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.Settings
 import android.net.Uri
 import android.content.pm.PackageManager
 import android.Manifest
@@ -87,6 +88,11 @@ class MainActivity : AppCompatActivity() {
         status = findViewById(R.id.status)
         frames = findViewById(R.id.frames)
         findViewById<Button>(R.id.startButton).setOnClickListener {
+            if (!Settings.canDrawOverlays(this)) {
+                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                status.text = "Allow Display over other apps, then press START again"
+                return@setOnClickListener
+            }
             val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             captureLauncher.launch(mgr.createScreenCaptureIntent())
         }

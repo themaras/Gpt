@@ -8,6 +8,11 @@ import android.provider.MediaStore
 import android.content.ContentUris
 import android.content.ContentValues
 import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
+import android.view.WindowManager
+import android.widget.Button
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.media.ImageReader
@@ -39,6 +44,8 @@ class CaptureService : Service() {
     private var screenshotObserver: ContentObserver? = null
     private var lastScreenshotId = -1L
     private var projectionCallback: MediaProjection.Callback? = null
+    private var overlayButton: Button? = null
+    private var windowManager: WindowManager? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
@@ -54,6 +61,7 @@ class CaptureService : Service() {
                 .setContentTitle("Poker Capture").setContentText("Screen capture active")
                 .setSmallIcon(android.R.drawable.ic_menu_camera).build())
             startCapture(intent)
+            showOverlayButton()
         }
         return START_NOT_STICKY
     }
@@ -183,6 +191,61 @@ class CaptureService : Service() {
             contentResolver.delete(uri, null, null)
         }
     }
+
+    private fun showOverlayButton() {
+        if (overlayButton != null) return
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val button = Button(this).apply {
+            text = "CAP"
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.argb(210, 30, 30, 30)) }
+            setOnClickListener { captureAndNotify() }
+        }
+        val size = (64 * resources.displayMetrics.density).toInt()
+        val params = WindowManager.LayoutParams(size, size, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            x = (8 * resources.displayMetrics.density).toInt()
+        }
+        windowManager?.addView(button, params)
+        overlayButton = button
+    }
+
+    private fun captureAndNotify() {
+        val image = reader?.acquireLatestImage() ?: return
+        try {
+            val plane = image.planes[0]
+            val padding = plane.rowStride - plane.pixelStride * image.width
+            val bmp = Bitmap.createBitmap(image.width + padding / plane.pixelStride, image.height, Bitmap.Config.ARGB_8888)
+            bmp.copyPixelsFromBuffer(plane.buffer)
+            val clean = Bitmap.createBitmap(bmp, 0, 0, image.width, image.height)
+            bmp.recycle()
+            val ts = System.currentTimeMillis()
+            saveFrame(clean, ts)
+            clean.recycle()
+            val uri = contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Images.Media._ID), MediaStore.Images.Media.DISPLAY_NAME + "=?",
+                arrayOf("PokerCapture_$ts.jpg"), null)?.use { cur ->
+                if (cur.moveToFirst()) ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cur.getLong(0)) else null
+            } ?: return
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "image/*"; putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); setPackage("com.openai.chatgpt")
+            }
+            val pending = PendingIntent.getActivity(this, ts.toInt(), send, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            getSystemService(NotificationManager::class.java).notify(1001,
+                NotificationCompat.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_share)
+                    .setContentTitle("Capture ready").setContentText("Tap to send to ChatGPT")
+                    .setContentIntent(pending).setAutoCancel(true).setPriority(NotificationCompat.PRIORITY_HIGH).build())
+        } finally { image.close() }
+    }
+
+    private fun removeOverlayButton() {
+        overlayButton?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
+        overlayButton = null
+    }
+
     private fun stopCapture() {
         reader?.close(); reader = null
         projectionCallback?.let { callback -> projection?.unregisterCallback(callback) }
@@ -190,7 +253,7 @@ class CaptureService : Service() {
         projection?.stop(); projection = null
     }
     override fun onDestroy() {
-        stopScreenshotWatcher(); stopCapture(); super.onDestroy() }
+        removeOverlayButton(); stopScreenshotWatcher(); stopCapture(); super.onDestroy() }
     private fun startScreenshotWatcher() {
         if (screenshotObserver != null) return
         screenshotObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {

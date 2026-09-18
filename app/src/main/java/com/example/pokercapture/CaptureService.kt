@@ -2,6 +2,8 @@ package com.example.pokercapture
 
 import android.app.*
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.database.ContentObserver
 import android.net.Uri
 import android.provider.MediaStore
@@ -250,45 +252,48 @@ class CaptureService : Service() {
         try {
             val ts = System.currentTimeMillis()
             saveFrame(clean, ts)
-            val uri = contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                arrayOf(MediaStore.Images.Media._ID), MediaStore.Images.Media.DISPLAY_NAME + "=?",
-                arrayOf("PokerCapture_$ts.jpg"), null)?.use { cur ->
-                if (cur.moveToFirst()) ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cur.getLong(0)) else null
+            val uri = contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Images.Media._ID),
+                MediaStore.Images.Media.DISPLAY_NAME + "=?",
+                arrayOf("PokerCapture_$ts.jpg"),
+                null
+            )?.use { cur ->
+                if (cur.moveToFirst()) {
+                    ContentUris.withAppendedId(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        cur.getLong(0)
+                    )
+                } else null
             } ?: return
-            // Hybrid flow: try the same-chat accessibility path first, but never leave
-            // the user with a dead CAP button. If accessibility does not complete the send
-            // quickly, fall back to the old reliable Android share path.
-            val startedAt = System.currentTimeMillis()
-            val accessibilityStarted = ChatGptAccessibilityService.attachAndSend()
 
-            Handler(Looper.getMainLooper()).postDelayed({
-                val completed = ChatGptAccessibilityService.lastCompletedAt() >= startedAt
-                if (!completed) {
-                    val send = Intent(Intent.ACTION_SEND).apply {
-                        type = "image/*"
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        setPackage("com.openai.chatgpt")
-                    }
-                    try {
-                        startActivity(send.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                    } catch (_: Exception) {
-                        send.setPackage(null)
-                        startActivity(
-                            Intent.createChooser(send, "Send capture")
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    }
-
-                    if (!accessibilityStarted) {
-                        Toast.makeText(
-                            this,
-                            "Same-chat accessibility unavailable; used normal share",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
+            // The user keeps the desired ChatGPT conversation already open and active.
+            // Put the freshly saved image on the Android clipboard and let Accessibility
+            // paste it into that exact composer. No ACTION_SEND, no new-chat launch.
+            try {
+                grantUriPermission(
+                    "com.openai.chatgpt",
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+                val clipboard = getSystemService(ClipboardManager::class.java)
+                clipboard.setPrimaryClip(ClipData.newUri(contentResolver, "PokerCapture", uri))
+            } catch (e: Exception) {
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(this, "CAP: αποτυχία αντιγραφής εικόνας", Toast.LENGTH_SHORT).show()
                 }
-            }, 1400)
+                return
+            }
+
+            if (!ChatGptAccessibilityService.pasteAndSend()) {
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(
+                        this,
+                        "CAP: ενεργοποίησε το Poker Capture Accessibility",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
         } finally {
             clean.recycle()
         }

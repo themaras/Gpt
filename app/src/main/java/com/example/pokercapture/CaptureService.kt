@@ -179,13 +179,14 @@ class CaptureService : Service() {
         } finally { image.close() }
     }
     private fun saveFrame(bitmap: Bitmap, ts: Long) {
-        // Keep enough detail for cards, stacks and bet sizes while reducing upload size.
-        // 75% linear resolution = ~44% of the original pixels.
-        val targetWidth = (bitmap.width * 0.75f).toInt().coerceAtLeast(1)
-        val targetHeight = (bitmap.height * 0.75f).toInt().coerceAtLeast(1)
-        val output = if (targetWidth != bitmap.width || targetHeight != bitmap.height)
-            Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
-        else bitmap
+        // In split-screen the poker table is on the left. Save only that half,
+        // then downscale/compress more aggressively to keep uploads small.
+        val halfWidth = (bitmap.width / 2).coerceAtLeast(1)
+        val half = Bitmap.createBitmap(bitmap, 0, 0, halfWidth, bitmap.height)
+        val targetWidth = (half.width * 0.70f).toInt().coerceAtLeast(1)
+        val targetHeight = (half.height * 0.70f).toInt().coerceAtLeast(1)
+        val output = Bitmap.createScaledBitmap(half, targetWidth, targetHeight, true)
+        half.recycle()
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, "PokerCapture_$ts.jpg")
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
@@ -195,7 +196,7 @@ class CaptureService : Service() {
         val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return
         try {
             contentResolver.openOutputStream(uri)?.use {
-                output.compress(Bitmap.CompressFormat.JPEG, 72, it)
+                output.compress(Bitmap.CompressFormat.JPEG, 60, it)
             } ?: throw IllegalStateException("Could not open MediaStore output stream")
             values.clear()
             values.put(MediaStore.Images.Media.IS_PENDING, 0)

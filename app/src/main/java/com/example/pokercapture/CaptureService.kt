@@ -46,6 +46,8 @@ class CaptureService : Service() {
     private var projectionCallback: MediaProjection.Callback? = null
     private var overlayButton: Button? = null
     private var windowManager: WindowManager? = null
+    private val latestFrameLock = Any()
+    private var latestFrame: Bitmap? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
@@ -101,6 +103,12 @@ class CaptureService : Service() {
             bmp.copyPixelsFromBuffer(buffer)
             val clean = Bitmap.createBitmap(bmp, 0, 0, image.width, image.height)
             bmp.recycle()
+            // Keep one completed frame ready for the CAP button. The ImageReader listener is
+            // the only consumer; CAP must not race it by acquiring images independently.
+            synchronized(latestFrameLock) {
+                latestFrame?.recycle()
+                latestFrame = clean.copy(Bitmap.Config.ARGB_8888, false)
+            }
             val x0 = (clean.width * 0.08).toInt(); val x1 = (clean.width * 0.92).toInt()
             val y0 = (clean.height * 0.18).toInt(); val y1 = (clean.height * 0.72).toInt()
             var sig = 0L; var samples = 0; var y = y0
@@ -207,11 +215,11 @@ class CaptureService : Service() {
         val button = Button(this).apply {
             text = "CAP"
             setTextColor(Color.WHITE)
-            textSize = 12f
+            textSize = 15f
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.argb(210, 30, 30, 30)) }
             setOnClickListener { captureWhenFrameReady() }
         }
-        val size = (64 * resources.displayMetrics.density).toInt()
+        val size = (80 * resources.displayMetrics.density).toInt()
         val params = WindowManager.LayoutParams(size, size, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
@@ -222,25 +230,20 @@ class CaptureService : Service() {
     }
 
     private fun captureWhenFrameReady(attempt: Int = 0) {
-        if (reader?.acquireLatestImage()?.also { it.close() } == null) {
+        val frame = synchronized(latestFrameLock) {
+            latestFrame?.copy(Bitmap.Config.ARGB_8888, false)
+        }
+        if (frame == null) {
             if (attempt < 15) Handler(Looper.getMainLooper()).postDelayed({ captureWhenFrameReady(attempt + 1) }, 50)
             return
         }
-        Handler(Looper.getMainLooper()).postDelayed({ captureAndNotify() }, 50)
+        captureAndNotify(frame)
     }
 
-    private fun captureAndNotify() {
-        val image = reader?.acquireLatestImage() ?: return
+    private fun captureAndNotify(clean: Bitmap) {
         try {
-            val plane = image.planes[0]
-            val padding = plane.rowStride - plane.pixelStride * image.width
-            val bmp = Bitmap.createBitmap(image.width + padding / plane.pixelStride, image.height, Bitmap.Config.ARGB_8888)
-            bmp.copyPixelsFromBuffer(plane.buffer)
-            val clean = Bitmap.createBitmap(bmp, 0, 0, image.width, image.height)
-            bmp.recycle()
             val ts = System.currentTimeMillis()
             saveFrame(clean, ts)
-            clean.recycle()
             val uri = contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 arrayOf(MediaStore.Images.Media._ID), MediaStore.Images.Media.DISPLAY_NAME + "=?",
                 arrayOf("PokerCapture_$ts.jpg"), null)?.use { cur ->
@@ -256,7 +259,9 @@ class CaptureService : Service() {
                 send.setPackage(null)
                 startActivity(Intent.createChooser(send, "Send capture").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
-        } finally { image.close() }
+        } finally {
+            clean.recycle()
+        }
     }
 
     private fun removeOverlayButton() {
@@ -265,6 +270,7 @@ class CaptureService : Service() {
     }
 
     private fun stopCapture() {
+        synchronized(latestFrameLock) { latestFrame?.recycle(); latestFrame = null }
         reader?.close(); reader = null
         projectionCallback?.let { callback -> projection?.unregisterCallback(callback) }
         projectionCallback = null

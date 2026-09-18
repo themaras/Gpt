@@ -208,8 +208,8 @@ class CaptureService : Service() {
     }
 
     private fun shareLatestScreenshotToChatGPT() {
-        val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.RELATIVE_PATH)
-        contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, null, null, MediaStore.Images.Media.DATE_ADDED + " DESC")?.use { cur ->
+        val projectionCols = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.RELATIVE_PATH)
+        contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projectionCols, null, null, MediaStore.Images.Media.DATE_ADDED + " DESC")?.use { cur ->
             if (!cur.moveToFirst()) return
             val id = cur.getLong(0)
             val name = cur.getString(1) ?: ""
@@ -220,14 +220,22 @@ class CaptureService : Service() {
             val send = Intent(Intent.ACTION_SEND).apply {
                 type = "image/*"
                 putExtra(Intent.EXTRA_STREAM, imageUri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 setPackage("com.openai.chatgpt")
             }
-            try { startActivity(send) } catch (_: Exception) {
-                send.setPackage(null)
-                startActivity(Intent.createChooser(send, "Send screenshot").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            }
+            val pending = PendingIntent.getActivity(
+                this, id.toInt(), send,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val notification = NotificationCompat.Builder(this, CHANNEL)
+                .setSmallIcon(android.R.drawable.ic_menu_share)
+                .setContentTitle("Screenshot ready")
+                .setContentText("Tap to send to ChatGPT")
+                .setContentIntent(pending)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .build()
+            getSystemService(NotificationManager::class.java).notify(1001, notification)
         }
     }
-
 }

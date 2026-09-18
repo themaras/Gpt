@@ -13,6 +13,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 class ChatGptAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile private var instance: ChatGptAccessibilityService? = null
+        @Volatile private var lastCompletedAt: Long = 0L
 
         /** Returns false instead of falling back to ACTION_SEND/new-chat behavior. */
         fun attachAndSend(): Boolean {
@@ -22,6 +23,7 @@ class ChatGptAccessibilityService : AccessibilityService() {
         }
 
         fun isRunning(): Boolean = instance != null
+        fun lastCompletedAt(): Long = lastCompletedAt
         private const val CHATGPT_PACKAGE = "com.openai.chatgpt"
     }
 
@@ -231,6 +233,7 @@ class ChatGptAccessibilityService : AccessibilityService() {
         )
 
         if (click(send)) {
+            lastCompletedAt = System.currentTimeMillis()
             cancelFlow()
             return
         }

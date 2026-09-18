@@ -27,6 +27,13 @@ class MainActivity : AppCompatActivity() {
     }
     private lateinit var status: TextView
     private lateinit var frames: TextView
+    private var waitingForOverlayPermission = false
+
+    private fun requestScreenCapturePermission() {
+        val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        status.text = "Waiting for screen capture permission"
+        captureLauncher.launch(mgr.createScreenCaptureIntent())
+    }
     private val captureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val i = Intent(this, CaptureService::class.java).apply {
@@ -81,7 +88,14 @@ class MainActivity : AppCompatActivity() {
         contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, screenshotObserver)
     }
 
-    override fun onResume() { super.onResume(); refreshFrameCount() }
+    override fun onResume() {
+        super.onResume()
+        refreshFrameCount()
+        if (waitingForOverlayPermission && Settings.canDrawOverlays(this)) {
+            waitingForOverlayPermission = false
+            requestScreenCapturePermission()
+        }
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -89,12 +103,16 @@ class MainActivity : AppCompatActivity() {
         frames = findViewById(R.id.frames)
         findViewById<Button>(R.id.startButton).setOnClickListener {
             if (!Settings.canDrawOverlays(this)) {
-                startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-                status.text = "Allow Display over other apps, then press START again"
+                waitingForOverlayPermission = true
+                status.text = "Allow Display over other apps"
+                try {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                } catch (_: Exception) {
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
+                }
                 return@setOnClickListener
             }
-            val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            captureLauncher.launch(mgr.createScreenCaptureIntent())
+            requestScreenCapturePermission()
         }
         findViewById<Button>(R.id.stopButton).setOnClickListener {
             startService(Intent(this, CaptureService::class.java).apply { action = CaptureService.ACTION_STOP })

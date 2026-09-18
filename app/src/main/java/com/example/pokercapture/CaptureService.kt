@@ -200,7 +200,7 @@ class CaptureService : Service() {
             setTextColor(Color.WHITE)
             textSize = 12f
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.argb(210, 30, 30, 30)) }
-            setOnClickListener { captureAndNotify() }
+            setOnClickListener { captureWhenFrameReady() }
         }
         val size = (64 * resources.displayMetrics.density).toInt()
         val params = WindowManager.LayoutParams(size, size, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -210,6 +210,14 @@ class CaptureService : Service() {
         }
         windowManager?.addView(button, params)
         overlayButton = button
+    }
+
+    private fun captureWhenFrameReady(attempt: Int = 0) {
+        if (reader?.acquireLatestImage()?.also { it.close() } == null) {
+            if (attempt < 15) Handler(Looper.getMainLooper()).postDelayed({ captureWhenFrameReady(attempt + 1) }, 50)
+            return
+        }
+        Handler(Looper.getMainLooper()).postDelayed({ captureAndNotify() }, 50)
     }
 
     private fun captureAndNotify() {

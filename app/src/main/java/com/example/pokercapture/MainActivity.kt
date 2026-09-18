@@ -5,12 +5,25 @@ import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
+import android.provider.MediaStore
+import android.net.Uri
+import android.content.pm.PackageManager
+import android.Manifest
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import android.widget.Button
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
+    private var lastSharedId = -1L
+    private val screenshotObserver = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            super.onChange(selfChange, uri)
+            shareLatestScreenshot()
+        }
+    }
     private lateinit var status: TextView
     private lateinit var frames: TextView
     private val captureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -34,6 +47,39 @@ class MainActivity : AppCompatActivity() {
         }
         frames.text = "Frames saved: " + prefs.getInt("frames_saved", 0)
     }
+    private fun shareLatestScreenshot() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) return
+        val projection = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.RELATIVE_PATH)
+        contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, null, null, MediaStore.Images.Media.DATE_ADDED + " DESC")?.use { cur ->
+            if (!cur.moveToFirst()) return
+            val id = cur.getLong(0)
+            val name = cur.getString(1) ?: ""
+            val rel = cur.getString(2) ?: ""
+            if (id == lastSharedId || (!name.contains("screenshot", true) && !rel.contains("screenshot", true))) return
+            lastSharedId = id
+            val uri = android.content.ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "image/*"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                setPackage("com.openai.chatgpt")
+            }
+            try { startActivity(send) } catch (_: Exception) {
+                send.setPackage(null)
+                startActivity(Intent.createChooser(send, "Send screenshot"))
+            }
+        }
+    }
+
+    private fun enableScreenshotBridge() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.READ_MEDIA_IMAGES), 42)
+        }
+        contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, screenshotObserver)
+    }
+
     override fun onResume() { super.onResume(); refreshFrameCount() }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

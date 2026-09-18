@@ -233,11 +233,12 @@ class CaptureService : Service() {
                 type = "image/*"; putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); setPackage("com.openai.chatgpt")
             }
-            val pending = PendingIntent.getActivity(this, ts.toInt(), send, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            getSystemService(NotificationManager::class.java).notify(1001,
-                NotificationCompat.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_share)
-                    .setContentTitle("Capture ready").setContentText("Tap to send to ChatGPT")
-                    .setContentIntent(pending).setAutoCancel(true).setPriority(NotificationCompat.PRIORITY_HIGH).build())
+            try {
+                startActivity(send.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (_: Exception) {
+                send.setPackage(null)
+                startActivity(Intent.createChooser(send, "Send capture").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
         } finally { image.close() }
     }
 

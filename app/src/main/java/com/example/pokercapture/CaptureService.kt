@@ -52,6 +52,22 @@ class CaptureService : Service() {
     private val latestFrameLock = Any()
     private var latestFrame: Bitmap? = null
 
+    private fun selectedAiPackage(): String {
+        return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
+            "GEMINI" -> "com.google.android.apps.bard"
+            "CLAUDE" -> "com.anthropic.claude"
+            else -> "com.openai.chatgpt"
+        }
+    }
+
+    private fun selectedAiLabel(): String {
+        return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
+            "GEMINI" -> "Gemini"
+            "CLAUDE" -> "Claude"
+            else -> "ChatGPT"
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
         super.onCreate()
@@ -272,7 +288,7 @@ class CaptureService : Service() {
             // paste it into that exact composer. No ACTION_SEND, no new-chat launch.
             try {
                 grantUriPermission(
-                    "com.openai.chatgpt",
+                    selectedAiPackage(),
                     uri,
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
@@ -289,7 +305,7 @@ class CaptureService : Service() {
                 Handler(Looper.getMainLooper()).post {
                     Toast.makeText(
                         this,
-                        "CAP: ενεργοποίησε το Poker Capture Accessibility",
+                        "CAP: ενεργοποίησε το Poker Capture Accessibility για " + selectedAiLabel(),
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -343,7 +359,7 @@ class CaptureService : Service() {
                 type = "image/*"
                 putExtra(Intent.EXTRA_STREAM, imageUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                setPackage("com.openai.chatgpt")
+                setPackage(selectedAiPackage())
             }
             val pending = PendingIntent.getActivity(
                 this, id.toInt(), send,
@@ -352,7 +368,7 @@ class CaptureService : Service() {
             val notification = NotificationCompat.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_menu_share)
                 .setContentTitle("Screenshot ready")
-                .setContentText("Tap to send to ChatGPT")
+                .setContentText("Tap to send to " + selectedAiLabel())
                 .setContentIntent(pending)
                 .setAutoCancel(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)

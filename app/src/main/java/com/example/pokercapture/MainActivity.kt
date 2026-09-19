@@ -29,6 +29,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var frames: TextView
     private var waitingForOverlayPermission = false
 
+    private fun selectedAiPackage(): String {
+        return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
+            "GEMINI" -> "com.google.android.apps.bard"
+            "CLAUDE" -> "com.anthropic.claude"
+            else -> "com.openai.chatgpt"
+        }
+    }
+
     private fun requestScreenCapturePermission() {
         val mgr = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         status.text = "Waiting for screen capture permission"
@@ -71,7 +79,7 @@ class MainActivity : AppCompatActivity() {
                 type = "image/*"
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                setPackage("com.openai.chatgpt")
+                setPackage(selectedAiPackage())
             }
             try { startActivity(send) } catch (_: Exception) {
                 send.setPackage(null)
@@ -102,7 +110,23 @@ class MainActivity : AppCompatActivity() {
         status = findViewById(R.id.status)
         frames = findViewById(R.id.frames)
         val cropGroup = findViewById<android.widget.RadioGroup>(R.id.cropGroup)
+        val aiGroup = findViewById<android.widget.RadioGroup>(R.id.aiGroup)
         val prefs = getSharedPreferences("capture", MODE_PRIVATE)
+
+        when (prefs.getString("ai_model", "CHATGPT")) {
+            "GEMINI" -> findViewById<android.widget.RadioButton>(R.id.aiGemini).isChecked = true
+            "CLAUDE" -> findViewById<android.widget.RadioButton>(R.id.aiClaude).isChecked = true
+            else -> findViewById<android.widget.RadioButton>(R.id.aiChatGpt).isChecked = true
+        }
+        aiGroup.setOnCheckedChangeListener { _, checkedId ->
+            val model = when (checkedId) {
+                R.id.aiGemini -> "GEMINI"
+                R.id.aiClaude -> "CLAUDE"
+                else -> "CHATGPT"
+            }
+            prefs.edit().putString("ai_model", model).apply()
+        }
+
         when (prefs.getString("crop_mode", "RIGHT")) {
             "LEFT" -> findViewById<android.widget.RadioButton>(R.id.cropLeft).isChecked = true
             "TOP" -> findViewById<android.widget.RadioButton>(R.id.cropTop).isChecked = true

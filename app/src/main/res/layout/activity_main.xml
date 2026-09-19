@@ -8,6 +8,14 @@
     <TextView android:id="@+id/frames" android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:text="Frames saved: 0" android:textSize="18sp" android:layout_marginTop="10dp" />
     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:text="AI model" android:textSize="16sp" android:layout_marginTop="18dp" />
+    <RadioGroup android:id="@+id/aiGroup" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center">
+        <RadioButton android:id="@+id/aiChatGpt" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ChatGPT" />
+        <RadioButton android:id="@+id/aiGemini" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Gemini" />
+        <RadioButton android:id="@+id/aiClaude" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Claude" />
+    </RadioGroup>
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:text="Screenshot half" android:textSize="16sp" android:layout_marginTop="18dp" />
     <RadioGroup android:id="@+id/cropGroup" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:orientation="horizontal" android:gravity="center">

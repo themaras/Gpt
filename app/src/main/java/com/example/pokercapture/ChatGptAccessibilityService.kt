@@ -15,6 +15,8 @@ class ChatGptAccessibilityService : AccessibilityService() {
     companion object {
         @Volatile private var instance: ChatGptAccessibilityService? = null
         private const val CHATGPT_PACKAGE = "com.openai.chatgpt"
+        private const val GEMINI_PACKAGE = "com.google.android.apps.bard"
+        private const val CLAUDE_PACKAGE = "com.anthropic.claude"
 
         fun pasteAndSend(): Boolean {
             val service = instance ?: return false
@@ -47,7 +49,8 @@ class ChatGptAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!active) return
         val pkg = event?.packageName?.toString().orEmpty()
-        if (pkg != CHATGPT_PACKAGE && pkg != "android") return
+        val targetPackage = selectedAiPackage()
+        if (pkg != targetPackage && pkg != "android") return
 
         // Contextual Paste menu may appear after the long press.
         if (longPressTried) {
@@ -56,6 +59,22 @@ class ChatGptAccessibilityService : AccessibilityService() {
 
         // Once an image is attached, ChatGPT exposes/activates Send. Keep checking.
         handler.postDelayed({ trySend() }, 80)
+    }
+
+    private fun selectedAiPackage(): String {
+        return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
+            "GEMINI" -> GEMINI_PACKAGE
+            "CLAUDE" -> CLAUDE_PACKAGE
+            else -> CHATGPT_PACKAGE
+        }
+    }
+
+    private fun selectedAiLabel(): String {
+        return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
+            "GEMINI" -> "Gemini"
+            "CLAUDE" -> "Claude"
+            else -> "ChatGPT"
+        }
     }
 
     private fun beginPasteFlow() {
@@ -161,23 +180,24 @@ class ChatGptAccessibilityService : AccessibilityService() {
         if (pasteRetries <= 12) {
             handler.postDelayed({ tryPasteIntoComposer() }, 100)
         } else {
-            fail("CAP: δεν βρέθηκε το ενεργό ChatGPT composer")
+            fail("CAP: δεν βρέθηκε το ενεργό " + selectedAiLabel() + " composer")
         }
     }
 
     private fun retrySend() {
         sendRetries++
         if (sendRetries <= 20) handler.postDelayed({ trySend() }, 100)
-        else fail("CAP: δεν βρέθηκε το ChatGPT window")
+        else fail("CAP: δεν βρέθηκε το " + selectedAiLabel() + " window")
     }
 
     private fun chatGptRoot(): AccessibilityNodeInfo? {
+        val targetPackage = selectedAiPackage()
         val activeRoot = rootInActiveWindow
-        if (activeRoot?.packageName?.toString() == CHATGPT_PACKAGE) return activeRoot
+        if (activeRoot?.packageName?.toString() == targetPackage) return activeRoot
 
         for (window in windows) {
             val root = window.root ?: continue
-            if (root.packageName?.toString() == CHATGPT_PACKAGE) return root
+            if (root.packageName?.toString() == targetPackage) return root
         }
         return null
     }

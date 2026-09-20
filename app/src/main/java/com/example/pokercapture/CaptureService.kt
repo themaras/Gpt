@@ -44,28 +44,49 @@ class CaptureService : Service() {
         const val EXTRA_LATENCY_MS = "latencyMs"
         const val EXTRA_IMAGE_KB = "imageKb"
         const val EXTRA_HTTP_CODE = "httpCode"
+        const val EXTRA_BOARD = "board"
+        const val EXTRA_STRATEGY = "strategy"
 
         private const val CHANNEL = "capture"
         private const val MODEL = "gpt-5.6-luna"
 
-        private const val POKER_PROMPT = """Analyze the poker hand using ALL 3 images of the same moment:
-1) FULL TABLE = overall context, board, pot, stacks, action.
-2) HERO ZOOM = Hero hole cards and current action buttons; trust this image most for Hero cards and call/bet/raise amounts.
-3) TABLE ZOOM = seats and dealer-button area; trust this image most for dealer/button and position.
+        private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament hand using ALL 3 images of the same moment:
+1) FULL TABLE = overall context, board, pot, stacks, bets and current action.
+2) HERO ZOOM = Hero hole cards + action buttons. TRUST THIS MOST for Hero cards and exact call/bet/raise sizes.
+3) TABLE ZOOM = seats + dealer-button area. TRUST THIS MOST for position.
 
-Hero is the bottom-center player. Never infer position from screen location alone; use the dealer button and active seats.
-The PokerStars dealer button may appear as the small red/white spade marker next to a player.
-Never invent unreadable values. If position/stack is uncertain, use ? but still choose an action when Hero cards and current action are readable.
+POSITION DETECTION — MUST FOLLOW THIS ORDER:
+A. Hero is the bottom-center player with the two face-up hole cards.
+B. Find the actual dealer/button marker. On this PokerStars theme it is the small red/white circular marker with a spade symbol next to one player.
+C. Identify only seats actually dealt into the current hand.
+D. Starting from the dealer button and moving clockwise, assign positions from the active seats.
+For 6-handed: BTN, SB, BB, UTG, HJ, CO.
+For 5-handed: BTN, SB, BB, UTG, CO.
+For 4-handed: BTN, SB, BB, CO.
+For 3-handed: BTN, SB, BB.
+Heads-up: BTN/SB, BB.
+NEVER infer Hero's position from where Hero sits on the screen.
+Do not confuse avatars, bounty icons, blind chips, country flags or action chips with the dealer button.
+If the dealer marker cannot be located reliably, POSITION=? rather than guessing.
+
+STRATEGY:
+Give a practical low-stakes tournament recommendation based on effective stack, position, prior action, pot odds, board texture and visible opponent action.
+Do not default to CALL or BET. Consider FOLD, CHECK and RAISE normally.
+For strong value hands, prefer appropriate value aggression when warranted.
+For weak hands facing meaningful action, fold when calling is not justified.
+Never invent unreadable values.
 
 Return exactly ONE line:
-ACTION|SIZE|POSITION|HAND|STACK|CONFIDENCE
+ACTION|SIZE|POSITION|HAND|STACK|BOARD|STRATEGY|CONFIDENCE
 
 ACTION: FOLD,CHECK,CALL,BET,RAISE,ALL-IN,UNCLEAR.
 SIZE: chip amount for CALL/BET/RAISE when applicable, otherwise -.
 HAND: compact cards, e.g. Td9h.
 STACK: effective stack in BB if reliable, otherwise ?.
+BOARD: compact board, e.g. Ac4h2d or PREFLOP.
+STRATEGY: maximum 6 words, e.g. Value raise; Weak hand fold; Check and evaluate.
 CONFIDENCE: HIGH,MEDIUM,LOW.
-No explanation."""
+No explanation beyond that one line."""
     }
 
     private var projection: MediaProjection? = null
@@ -279,7 +300,7 @@ No explanation."""
                         )
                     )
                     put("reasoning", JSONObject().put("effort", "none"))
-                    put("max_output_tokens", 80)
+                    put("max_output_tokens", 120)
                 }
 
                 val apiResult = callOpenAi(apiKey, body.toString(), imageKb)
@@ -321,6 +342,8 @@ No explanation."""
                         .putExtra(EXTRA_LATENCY_MS, elapsed)
                         .putExtra(EXTRA_IMAGE_KB, imageKb)
                         .putExtra(EXTRA_HTTP_CODE, httpCode)
+                        .putExtra(EXTRA_BOARD, parsed.board)
+                        .putExtra(EXTRA_STRATEGY, parsed.strategy)
                 )
             } catch (e: ApiHttpException) {
                 httpCode = e.httpCode
@@ -482,6 +505,8 @@ No explanation."""
         val position: String,
         val hand: String,
         val stack: String,
+        val board: String,
+        val strategy: String,
         val confidence: String
     )
 
@@ -493,7 +518,7 @@ No explanation."""
             .orEmpty()
 
         val p = line.split("|").map { it.trim() }
-        if (p.size < 6) return PokerResult("UNCLEAR", "-", "?", "?", "?", "LOW")
+        if (p.size < 8) return PokerResult("UNCLEAR", "-", "?", "?", "?", "?", "Need clearer read", "LOW")
 
         val allowed = setOf("FOLD", "CHECK", "CALL", "BET", "RAISE", "ALL-IN", "UNCLEAR")
         val action = p[0].uppercase().let { if (it in allowed) it else "UNCLEAR" }
@@ -504,7 +529,9 @@ No explanation."""
             position = p[2],
             hand = p[3],
             stack = p[4],
-            confidence = p[5].uppercase()
+            board = p[5],
+            strategy = p[6],
+            confidence = p[7].uppercase()
         )
     }
 

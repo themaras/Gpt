@@ -67,13 +67,24 @@
             android:layout_marginTop="3dp" />
 
         <TextView
+            android:id="@+id/visionSummary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="AI SEES: —"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:padding="8dp"
+            android:maxLines="6"
+            android:layout_marginTop="4dp" />
+
+        <TextView
             android:id="@+id/rawResponse"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center"
             android:text="RAW: —"
             android:textSize="11sp"
-            android:maxLines="2"
+            android:maxLines="6"
             android:layout_marginTop="3dp" />
 
         <TextView

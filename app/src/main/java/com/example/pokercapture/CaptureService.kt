@@ -60,6 +60,14 @@ class CaptureService : Service() {
         }
     }
 
+    private fun selectedClipboardPackages(): List<String> {
+        return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
+            "GEMINI" -> listOf("com.google.android.apps.bard", "com.android.chrome")
+            "CLAUDE" -> listOf("com.anthropic.claude", "com.android.chrome")
+            else -> listOf("com.openai.chatgpt", "com.android.chrome")
+        }
+    }
+
     private fun selectedAiLabel(): String {
         return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
             "GEMINI" -> "Gemini"
@@ -287,11 +295,19 @@ class CaptureService : Service() {
             // Put the freshly saved image on the Android clipboard and let Accessibility
             // paste it into that exact composer. No ACTION_SEND, no new-chat launch.
             try {
-                grantUriPermission(
-                    selectedAiPackage(),
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
+                // Grant the image URI to both the native AI app and Chrome. The user
+                // may keep Gemini/Claude/ChatGPT open as a web app in split screen.
+                for (pkg in selectedClipboardPackages()) {
+                    try {
+                        grantUriPermission(
+                            pkg,
+                            uri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    } catch (_: Exception) {
+                        // The package may not be installed; another target can still use the clip.
+                    }
+                }
                 val clipboard = getSystemService(ClipboardManager::class.java)
                 clipboard.setPrimaryClip(ClipData.newUri(contentResolver, "PokerCapture", uri))
             } catch (e: Exception) {

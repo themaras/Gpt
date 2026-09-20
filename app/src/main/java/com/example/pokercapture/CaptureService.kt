@@ -66,7 +66,10 @@ Important screenshot rules:
 - Determine positions from the dealer button and active seats.
 - Read blinds, pot, prior action, opponent stacks, board and tournament context when visible.
 - Never invent unreadable information.
-- If Hero cards, action context, or position are too unclear to make a reliable decision, return UNCLEAR|-|?|?|?|LOW.
+- Do NOT require every field to be perfectly readable before choosing an action.
+- If Hero cards and the current decision context are readable, make the best action even if POSITION or STACK must be ?.
+- Use UNCLEAR only when the image itself is insufficient to identify Hero cards or the decision being faced.
+- The visible action buttons are strong context: for example, Check/Raise means Hero is facing no bet.
 - Be fast and concise."""
     }
 
@@ -237,7 +240,7 @@ Important screenshot rules:
                 if (optimized !== crop) crop.recycle()
 
                 val jpegBytes = ByteArrayOutputStream().use { out ->
-                    optimized.compress(Bitmap.CompressFormat.JPEG, 68, out)
+                    optimized.compress(Bitmap.CompressFormat.JPEG, 84, out)
                     out.toByteArray()
                 }
                 optimized.recycle()
@@ -274,13 +277,13 @@ Important screenshot rules:
                                             JSONObject()
                                                 .put("type", "input_image")
                                                 .put("image_url", imageData)
-                                                .put("detail", "auto")
+                                                .put("detail", "high")
                                         )
                                 )
                             }
                         )
                     )
-                    put("max_output_tokens", 80)
+                    put("max_output_tokens", 100)
                 }
 
                 val apiResult = callOpenAi(apiKey, body.toString(), imageKb)
@@ -370,9 +373,9 @@ Important screenshot rules:
 
     private fun resizeForVision(bitmap: Bitmap): Bitmap {
         val maxDimension = max(bitmap.width, bitmap.height)
-        if (maxDimension <= 1400) return bitmap
+        if (maxDimension <= 1800) return bitmap
 
-        val scale = 1400f / maxDimension.toFloat()
+        val scale = 1800f / maxDimension.toFloat()
         return Bitmap.createScaledBitmap(
             bitmap,
             (bitmap.width * scale).roundToInt().coerceAtLeast(1),

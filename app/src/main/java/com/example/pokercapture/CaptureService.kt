@@ -247,6 +247,13 @@ Important screenshot rules:
 
                 imageKb = ((jpegBytes.size + 1023) / 1024).coerceAtLeast(1)
 
+                // Persist the exact JPEG bytes being sent to the API so the UI can preview
+                // the real MediaProjection crop. This is app-private and never goes to Gallery.
+                try {
+                    java.io.File(filesDir, "last_api_capture.jpg").writeBytes(jpegBytes)
+                } catch (_: Exception) {
+                }
+
                 val prefs = getSharedPreferences("capture", MODE_PRIVATE)
                 prefs.edit()
                     .putInt("api_request_count", prefs.getInt("api_request_count", 0) + 1)

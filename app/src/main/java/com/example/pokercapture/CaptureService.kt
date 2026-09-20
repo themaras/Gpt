@@ -45,13 +45,21 @@ class CaptureService : Service() {
         const val EXTRA_IMAGE_KB = "imageKb"
         const val EXTRA_HTTP_CODE = "httpCode"
         const val EXTRA_RAW_RESPONSE = "rawResponse"
+        const val EXTRA_VISION_SUMMARY = "visionSummary"
 
         private const val CHANNEL = "capture"
         private const val MODEL = "gpt-5.6-luna"
 
         private const val POKER_PROMPT = """You analyze a poker table screenshot.
-Return exactly ONE pipe-separated line and nothing else:
+Return exactly TWO lines and nothing else.
+
+Line 1:
 ACTION|SIZE|POSITION|HAND|STACK|CONFIDENCE
+
+Line 2:
+SEES|HERO=<cards or ?>|BOARD=<cards or PREFLOP>|BUTTONS=<visible buttons>|POT=<value or ?>|DEALER=<location/seat or ?>
+
+The SEES line is diagnostic. Report only what is actually visible in the image.
 
 ACTION must be one of FOLD,CHECK,CALL,BET,RAISE,ALL-IN,UNCLEAR.
 SIZE is the chip amount for BET/RAISE/CALL when visible or useful; otherwise -.
@@ -291,13 +299,19 @@ Important screenshot rules:
                             }
                         )
                     )
-                    put("max_output_tokens", 100)
+                    put("max_output_tokens", 180)
                 }
 
                 val apiResult = callOpenAi(apiKey, body.toString(), imageKb)
                 httpCode = apiResult.httpCode
 
                 val parsed = parsePokerResult(apiResult.text)
+                val visionSummary = apiResult.text
+                    .lineSequence()
+                    .firstOrNull { it.trim().startsWith("SEES|", ignoreCase = true) }
+                    ?.trim()
+                    ?.removePrefix("SEES|")
+                    ?: "No SEES line returned"
                 val elapsed = System.currentTimeMillis() - started
 
                 val actionText = if (
@@ -329,7 +343,8 @@ Important screenshot rules:
                         .putExtra(EXTRA_LATENCY_MS, elapsed)
                         .putExtra(EXTRA_IMAGE_KB, imageKb)
                         .putExtra(EXTRA_HTTP_CODE, httpCode)
-                        .putExtra(EXTRA_RAW_RESPONSE, apiResult.text.take(180))
+                        .putExtra(EXTRA_RAW_RESPONSE, apiResult.text.take(600))
+                        .putExtra(EXTRA_VISION_SUMMARY, visionSummary.take(500))
                 )
             } catch (e: ApiHttpException) {
                 httpCode = e.httpCode

@@ -8,34 +8,58 @@ import android.content.IntentFilter
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
-import android.text.InputType
 import android.widget.Button
-import android.widget.EditText
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
+    private lateinit var apiStatus: TextView
     private lateinit var resultAction: TextView
     private lateinit var resultMeta: TextView
     private lateinit var latency: TextView
+    private lateinit var requestInfo: TextView
     private lateinit var capButton: Button
-    private lateinit var apiKeyInput: EditText
     private var captureStarted = false
 
     private val resultReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.getStringExtra(CaptureService.EXTRA_STATE)) {
+            val state = intent?.getStringExtra(CaptureService.EXTRA_STATE) ?: return
+            val imageKb = intent.getIntExtra(CaptureService.EXTRA_IMAGE_KB, 0)
+            val http = intent.getIntExtra(CaptureService.EXTRA_HTTP_CODE, 0)
+
+            when (state) {
+                "CAPTURE_READY" -> {
+                    captureStarted = true
+                    status.text = "CAPTURE READY"
+                    apiStatus.text = "API: idle"
+                    capButton.isEnabled = true
+                }
                 "ANALYZING" -> {
                     capButton.isEnabled = false
-                    capButton.text = "ANALYZING…"
+                    capButton.text = "WORKING…"
                     resultAction.text = "…"
-                    resultMeta.text = "Reading table"
+                    resultMeta.text = "Preparing crop"
+                    apiStatus.text = "API: preparing request"
                     latency.text = ""
+                }
+                "SENDING" -> {
+                    resultMeta.text = if (imageKb > 0) "Image: ${imageKb} KB" else "Sending image"
+                    apiStatus.text = "API: SENDING…"
+                }
+                "REQUEST_SENT" -> {
+                    apiStatus.text = "API: REQUEST SENT ✓"
+                    if (imageKb > 0) resultMeta.text = "Image: ${imageKb} KB"
+                }
+                "WAITING_API" -> {
+                    apiStatus.text = "API: WAITING RESPONSE…"
                 }
                 "RESULT" -> {
                     capButton.isEnabled = true
@@ -45,15 +69,26 @@ class MainActivity : AppCompatActivity() {
                     resultMeta.text = intent.getStringExtra(CaptureService.EXTRA_META) ?: ""
                     val ms = intent.getLongExtra(CaptureService.EXTRA_LATENCY_MS, 0L)
                     latency.text = if (ms > 0) String.format("%.1f sec", ms / 1000.0) else ""
+                    apiStatus.text = if (http > 0) "API: RESPONSE OK • HTTP $http" else "API: RESPONSE OK"
+                    updateRequestInfo()
                 }
                 "ERROR" -> {
-                    capButton.isEnabled = true
+                    capButton.isEnabled = captureStarted
                     capButton.text = "CAP"
                     resultAction.text = "RETRY"
                     resultMeta.text =
                         intent.getStringExtra(CaptureService.EXTRA_ERROR) ?: "Request failed"
                     val ms = intent.getLongExtra(CaptureService.EXTRA_LATENCY_MS, 0L)
                     latency.text = if (ms > 0) String.format("%.1f sec", ms / 1000.0) else ""
+                    apiStatus.text = if (http > 0) "API: ERROR HTTP $http" else "API: ERROR"
+                    updateRequestInfo()
+                }
+                "STOPPED" -> {
+                    captureStarted = false
+                    capButton.isEnabled = false
+                    capButton.text = "CAP"
+                    status.text = "STOPPED"
+                    apiStatus.text = "API: idle"
                 }
             }
         }
@@ -67,12 +102,11 @@ class MainActivity : AppCompatActivity() {
                     putExtra(CaptureService.EXTRA_RESULT_CODE, result.resultCode)
                     putExtra(CaptureService.EXTRA_DATA, result.data)
                 })
-                captureStarted = true
-                status.text = "READY"
-                capButton.isEnabled = true
+                status.text = "STARTING CAPTURE…"
             } else {
                 captureStarted = false
-                status.text = "Screen capture permission denied"
+                status.text = "CAPTURE BLOCKED / DENIED"
+                apiStatus.text = "API: not started"
                 capButton.isEnabled = false
             }
         }
@@ -82,15 +116,12 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         status = findViewById(R.id.status)
+        apiStatus = findViewById(R.id.apiStatus)
         resultAction = findViewById(R.id.resultAction)
         resultMeta = findViewById(R.id.resultMeta)
         latency = findViewById(R.id.latency)
+        requestInfo = findViewById(R.id.requestInfo)
         capButton = findViewById(R.id.capButton)
-        apiKeyInput = findViewById(R.id.apiKeyInput)
-
-        apiKeyInput.inputType =
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        if (ApiKeyStore.hasKey(this)) apiKeyInput.setText("••••••••••••••••")
 
         val prefs = getSharedPreferences("capture", MODE_PRIVATE)
         val cropGroup = findViewById<RadioGroup>(R.id.cropGroup)
@@ -112,29 +143,18 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putString("crop_mode", mode).apply()
         }
 
-        findViewById<Button>(R.id.saveKeyButton).setOnClickListener {
-            val entered = apiKeyInput.text.toString().trim()
-            if (entered.isBlank() || entered.startsWith("•")) {
-                Toast.makeText(this, "Paste a new API key first", Toast.LENGTH_SHORT).show()
-            } else {
-                ApiKeyStore.save(this, entered)
-                apiKeyInput.setText("••••••••••••••••")
-                Toast.makeText(
-                    this,
-                    "API key saved encrypted on this device",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
+        findViewById<Button>(R.id.settingsButton).setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
         }
 
         findViewById<Button>(R.id.startButton).setOnClickListener {
             if (!ApiKeyStore.hasKey(this)) {
-                Toast.makeText(this, "Save your OpenAI API key first", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Open Settings and save your API key first", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             val mgr =
                 getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            status.text = "Choose ENTIRE SCREEN"
+            status.text = "WAITING FOR ANDROID CAPTURE PERMISSION"
             captureLauncher.launch(mgr.createScreenCaptureIntent())
         }
 
@@ -153,10 +173,26 @@ class MainActivity : AppCompatActivity() {
             startService(Intent(this, CaptureService::class.java).apply {
                 action = CaptureService.ACTION_STOP
             })
-            captureStarted = false
-            capButton.isEnabled = false
-            status.text = "STOPPED"
         }
+
+        updateRequestInfo()
+    }
+
+    private fun updateRequestInfo() {
+        val prefs = getSharedPreferences("capture", MODE_PRIVATE)
+        val count = prefs.getInt("api_request_count", 0)
+        val last = prefs.getLong("api_last_request_at", 0L)
+        val lastText = if (last > 0L) {
+            SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(last))
+        } else {
+            "—"
+        }
+        requestInfo.text = "Requests: $count • Last: $lastText"
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateRequestInfo()
     }
 
     override fun onStart() {
@@ -171,10 +207,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
-        try {
-            unregisterReceiver(resultReceiver)
-        } catch (_: Exception) {
-        }
+        try { unregisterReceiver(resultReceiver) } catch (_: Exception) {}
         super.onStop()
     }
 }

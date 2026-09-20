@@ -27,11 +27,16 @@ class ChatGptAccessibilityService : AccessibilityService() {
         fun isRunning(): Boolean = instance != null
     }
 
+    private enum class AiTarget {
+        CHATGPT, GEMINI, CLAUDE
+    }
+
     private val handler = Handler(Looper.getMainLooper())
     private var active = false
     private var pasteRetries = 0
     private var sendRetries = 0
     private var longPressTried = false
+    private var lastComposerBounds: Rect? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -50,30 +55,36 @@ class ChatGptAccessibilityService : AccessibilityService() {
         if (!active) return
         val pkg = event?.packageName?.toString().orEmpty()
         val targetPackage = selectedAiPackage()
-        if (pkg != targetPackage && pkg != "android") return
+        if (pkg != targetPackage && pkg != "android" && pkg != "com.android.systemui") return
 
-        // Contextual Paste menu may appear after the long press.
         if (longPressTried) {
             handler.postDelayed({ clickPasteMenuIfVisible() }, 40)
         }
 
-        // Once an image is attached, ChatGPT exposes/activates Send. Keep checking.
         handler.postDelayed({ trySend() }, 80)
     }
 
-    private fun selectedAiPackage(): String {
+    private fun selectedAiTarget(): AiTarget {
         return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
-            "GEMINI" -> GEMINI_PACKAGE
-            "CLAUDE" -> CLAUDE_PACKAGE
-            else -> CHATGPT_PACKAGE
+            "GEMINI" -> AiTarget.GEMINI
+            "CLAUDE" -> AiTarget.CLAUDE
+            else -> AiTarget.CHATGPT
+        }
+    }
+
+    private fun selectedAiPackage(): String {
+        return when (selectedAiTarget()) {
+            AiTarget.GEMINI -> GEMINI_PACKAGE
+            AiTarget.CLAUDE -> CLAUDE_PACKAGE
+            AiTarget.CHATGPT -> CHATGPT_PACKAGE
         }
     }
 
     private fun selectedAiLabel(): String {
-        return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
-            "GEMINI" -> "Gemini"
-            "CLAUDE" -> "Claude"
-            else -> "ChatGPT"
+        return when (selectedAiTarget()) {
+            AiTarget.GEMINI -> "Gemini"
+            AiTarget.CLAUDE -> "Claude"
+            AiTarget.CHATGPT -> "ChatGPT"
         }
     }
 
@@ -83,15 +94,16 @@ class ChatGptAccessibilityService : AccessibilityService() {
         pasteRetries = 0
         sendRetries = 0
         longPressTried = false
+        lastComposerBounds = null
 
-        // The user keeps the wanted ChatGPT conversation already open/active.
-        // CAP is a non-focusable overlay, so we never launch ChatGPT or use ACTION_SEND.
+        // CAP stays on the current conversation. Never launch the AI app and never
+        // use ACTION_SEND here. The screenshot URI is already on the clipboard.
         handler.postDelayed({ tryPasteIntoComposer() }, 70)
     }
 
     private fun tryPasteIntoComposer() {
         if (!active) return
-        val root = chatGptRoot()
+        val root = targetRoot()
         if (root == null) {
             retryPaste()
             return
@@ -103,27 +115,32 @@ class ChatGptAccessibilityService : AccessibilityService() {
             return
         }
 
+        lastComposerBounds = Rect().also { composer.getBoundsInScreen(it) }
+
         composer.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         composer.performAction(AccessibilityNodeInfo.ACTION_CLICK)
 
-        // Best path: Android accessibility paste directly into the already-open composer.
+        // First try Android's direct accessibility paste. ChatGPT accepts this on
+        // most builds, while Gemini/Claude may fall back to the contextual Paste menu.
         val pasted = composer.performAction(AccessibilityNodeInfo.ACTION_PASTE)
         if (pasted) {
-            // First send attempt is exactly 200 ms later; retries continue while the
-            // image attachment finishes rendering.
-            handler.postDelayed({ trySend() }, 200)
+            handler.postDelayed({ trySend() }, 220)
             return
         }
 
-        // Some Compose/WebView editors do not expose ACTION_PASTE for image clips.
-        // Long-press the real composer and choose the system Paste command instead.
         if (!longPressTried) {
             longPressTried = true
-            val b = Rect().also { composer.getBoundsInScreen(it) }
-            val x = b.exactCenterX()
+            val b = lastComposerBounds ?: return retryPaste()
+            val x = (b.left + b.width() * 0.45f)
             val y = b.exactCenterY()
-            longPress(x, y)
-            handler.postDelayed({ clickPasteMenuIfVisible() }, ViewConfiguration.getLongPressTimeout().toLong() + 120L)
+            if (!longPress(x, y)) {
+                retryPaste()
+                return
+            }
+            handler.postDelayed(
+                { clickPasteMenuIfVisible() },
+                ViewConfiguration.getLongPressTimeout().toLong() + 140L
+            )
         } else {
             retryPaste()
         }
@@ -131,53 +148,56 @@ class ChatGptAccessibilityService : AccessibilityService() {
 
     private fun clickPasteMenuIfVisible() {
         if (!active) return
-        val root = rootInActiveWindow ?: chatGptRoot() ?: return
+        val root = rootInActiveWindow ?: targetRoot() ?: return
         val paste = findClickableByLabels(
             root,
-            listOf("paste", "επικόλληση", "επικολληση"),
-            listOf("paste")
+            listOf(
+                "paste",
+                "paste from clipboard",
+                "insert from clipboard",
+                "επικόλληση",
+                "επικολληση"
+            ),
+            listOf("paste", "clipboard")
         )
         if (paste != null && paste.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-            handler.postDelayed({ trySend() }, 200)
+            handler.postDelayed({ trySend() }, 250)
         }
     }
 
     private fun trySend() {
         if (!active) return
-        val root = chatGptRoot()
+        val root = targetRoot()
         if (root == null) {
             retrySend()
             return
         }
 
-        val send = findClickableByLabels(
-            root,
-            listOf("send", "send message", "submit", "αποστολή", "αποστολη", "στείλε", "στειλε"),
-            listOf("send", "submit")
-        )
-
+        val send = findSendButton(root)
         if (send != null && send.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
             finishFlow()
             return
         }
 
         sendRetries++
-        if (sendRetries <= 20) {
+        if (sendRetries <= 24) {
             handler.postDelayed({ trySend() }, 100)
+            return
+        }
+
+        // Package-specific UIs can hide the send icon from the accessibility tree.
+        // First tap near the right side of the composer, then use the chat-window
+        // lower-right corner only as the final fallback.
+        if (tapSendNearComposer() || tapSendInChatWindow()) {
+            finishFlow()
         } else {
-            // Last resort: tap the lower-right of the actual ChatGPT window, not a
-            // hard-coded half of the tablet.
-            if (tapSendInChatWindow()) {
-                finishFlow()
-            } else {
-                fail("CAP: δεν βρέθηκε το Send")
-            }
+            fail("CAP: δεν βρέθηκε το Send στο " + selectedAiLabel())
         }
     }
 
     private fun retryPaste() {
         pasteRetries++
-        if (pasteRetries <= 12) {
+        if (pasteRetries <= 14) {
             handler.postDelayed({ tryPasteIntoComposer() }, 100)
         } else {
             fail("CAP: δεν βρέθηκε το ενεργό " + selectedAiLabel() + " composer")
@@ -186,11 +206,11 @@ class ChatGptAccessibilityService : AccessibilityService() {
 
     private fun retrySend() {
         sendRetries++
-        if (sendRetries <= 20) handler.postDelayed({ trySend() }, 100)
+        if (sendRetries <= 24) handler.postDelayed({ trySend() }, 100)
         else fail("CAP: δεν βρέθηκε το " + selectedAiLabel() + " window")
     }
 
-    private fun chatGptRoot(): AccessibilityNodeInfo? {
+    private fun targetRoot(): AccessibilityNodeInfo? {
         val targetPackage = selectedAiPackage()
         val activeRoot = rootInActiveWindow
         if (activeRoot?.packageName?.toString() == targetPackage) return activeRoot
@@ -202,43 +222,140 @@ class ChatGptAccessibilityService : AccessibilityService() {
         return null
     }
 
+    private fun composerHints(): List<String> {
+        return when (selectedAiTarget()) {
+            AiTarget.GEMINI -> listOf(
+                "ask gemini",
+                "enter a prompt",
+                "type a prompt",
+                "prompt",
+                "message",
+                "composer",
+                "ρώτησε το gemini",
+                "ρωτησε το gemini",
+                "μήνυμα",
+                "μηνυμα"
+            )
+            AiTarget.CLAUDE -> listOf(
+                "reply to claude",
+                "message claude",
+                "ask claude",
+                "chat input",
+                "message",
+                "prompt",
+                "composer",
+                "μήνυμα",
+                "μηνυμα"
+            )
+            AiTarget.CHATGPT -> listOf(
+                "message",
+                "ask anything",
+                "prompt",
+                "composer",
+                "μήνυμα",
+                "μηνυμα"
+            )
+        }
+    }
+
     private fun findComposer(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        // Prefer the currently focused input.
         root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.let {
-            if (it.isEditable || it.className?.toString()?.contains("EditText", true) == true) return it
+            if (isUsableInput(it)) return it
         }
 
-        val candidates = ArrayList<Pair<AccessibilityNodeInfo, Rect>>()
+        data class Candidate(val node: AccessibilityNodeInfo, val bounds: Rect, val score: Int)
+
+        val hints = composerHints()
+        val candidates = ArrayList<Candidate>()
         val q = java.util.ArrayDeque<AccessibilityNodeInfo>()
         q.add(root)
 
         while (!q.isEmpty()) {
             val n = q.removeFirst()
             val className = n.className?.toString().orEmpty()
-            val text = (
-                n.text?.toString().orEmpty() + " " +
-                n.contentDescription?.toString().orEmpty() + " " +
-                n.viewIdResourceName.orEmpty()
-            ).lowercase()
+            val haystack = nodeText(n)
+            val b = Rect().also { n.getBoundsInScreen(it) }
 
-            val inputLike = n.isEditable ||
-                className.contains("EditText", true) ||
-                text.contains("message") ||
-                text.contains("prompt") ||
-                text.contains("composer") ||
-                text.contains("μήνυμα") ||
-                text.contains("μηνυμα")
+            if (b.width() > 40 && b.height() > 20 && n.isVisibleToUser) {
+                var score = 0
+                if (n.isEditable) score += 100
+                if (className.contains("EditText", true)) score += 90
+                if (n.isFocusable) score += 15
+                if (n.isFocused) score += 45
+                if (n.actionList.any { it.id == AccessibilityNodeInfo.ACTION_PASTE }) score += 40
+                if (hints.any { haystack.contains(it) }) score += 55
 
-            if (inputLike) {
-                val b = Rect().also { n.getBoundsInScreen(it) }
-                if (b.width() > 40 && b.height() > 20) candidates.add(n to b)
+                // All three apps keep their composer near the bottom of their own window.
+                if (score > 0) {
+                    score += (b.bottom / 100)
+                    candidates.add(Candidate(n, b, score))
+                }
             }
 
             for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
         }
 
-        // The ChatGPT composer is the lowest input-like node in the chat window.
-        return candidates.maxByOrNull { it.second.bottom }?.first
+        return candidates.maxWithOrNull(
+            compareBy<Candidate> { it.score }.thenBy { it.bounds.bottom }
+        )?.node
+    }
+
+    private fun isUsableInput(node: AccessibilityNodeInfo): Boolean {
+        val className = node.className?.toString().orEmpty()
+        return node.isVisibleToUser && (
+            node.isEditable ||
+            className.contains("EditText", true) ||
+            composerHints().any { nodeText(node).contains(it) }
+        )
+    }
+
+    private fun findSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val labels = when (selectedAiTarget()) {
+            AiTarget.GEMINI -> listOf(
+                "send",
+                "send message",
+                "submit",
+                "send prompt",
+                "αποστολή",
+                "αποστολη",
+                "στείλε",
+                "στειλε"
+            )
+            AiTarget.CLAUDE -> listOf(
+                "send",
+                "send message",
+                "submit",
+                "send prompt",
+                "αποστολή",
+                "αποστολη",
+                "στείλε",
+                "στειλε"
+            )
+            AiTarget.CHATGPT -> listOf(
+                "send",
+                "send message",
+                "submit",
+                "αποστολή",
+                "αποστολη",
+                "στείλε",
+                "στειλε"
+            )
+        }
+
+        return findClickableByLabels(
+            root,
+            labels,
+            listOf("send", "submit", "send_button", "sendbutton")
+        )
+    }
+
+    private fun nodeText(node: AccessibilityNodeInfo): String {
+        return (
+            node.text?.toString().orEmpty() + " " +
+            node.contentDescription?.toString().orEmpty() + " " +
+            node.viewIdResourceName.orEmpty() + " " +
+            node.hintText?.toString().orEmpty()
+        ).lowercase()
     }
 
     private fun findClickableByLabels(
@@ -251,15 +368,12 @@ class ChatGptAccessibilityService : AccessibilityService() {
 
         while (!q.isEmpty()) {
             val n = q.removeFirst()
-            val haystack = (
-                n.text?.toString().orEmpty() + " " +
-                n.contentDescription?.toString().orEmpty() + " " +
-                n.viewIdResourceName.orEmpty()
-            ).lowercase()
-
-            if (labels.any { haystack.contains(it.lowercase()) } ||
-                idHints.any { haystack.contains(it.lowercase()) }) {
-                clickableAncestor(n)?.let { return it }
+            if (n.isVisibleToUser) {
+                val haystack = nodeText(n)
+                if (labels.any { haystack.contains(it.lowercase()) } ||
+                    idHints.any { haystack.contains(it.lowercase()) }) {
+                    clickableAncestor(n)?.let { return it }
+                }
             }
 
             for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
@@ -269,16 +383,32 @@ class ChatGptAccessibilityService : AccessibilityService() {
 
     private fun clickableAncestor(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
         var n = node
-        repeat(5) {
+        repeat(6) {
             if (n == null) return null
-            if (n!!.isClickable) return n
+            if (n!!.isVisibleToUser && n!!.isClickable) return n
             n = n!!.parent
         }
         return null
     }
 
+    private fun tapSendNearComposer(): Boolean {
+        val b = lastComposerBounds ?: return false
+        if (b.width() <= 0 || b.height() <= 0) return false
+
+        val density = resources.displayMetrics.density
+        val inset = when (selectedAiTarget()) {
+            AiTarget.GEMINI -> 28f
+            AiTarget.CLAUDE -> 28f
+            AiTarget.CHATGPT -> 26f
+        } * density
+
+        val x = (b.right - inset).coerceAtLeast(b.left + 1f)
+        val y = b.exactCenterY()
+        return tap(x, y)
+    }
+
     private fun tapSendInChatWindow(): Boolean {
-        val root = chatGptRoot() ?: return false
+        val root = targetRoot() ?: return false
         val b = Rect().also { root.getBoundsInScreen(it) }
         if (b.width() <= 0 || b.height() <= 0) return false
 

@@ -299,11 +299,16 @@ Important screenshot rules:
                             }
                         )
                     )
-                    put("max_output_tokens", 180)
+                    put("reasoning", JSONObject().put("effort", "none"))
+                    put("max_output_tokens", 500)
                 }
 
                 val apiResult = callOpenAi(apiKey, body.toString(), imageKb)
                 httpCode = apiResult.httpCode
+
+                if (apiResult.text.isBlank()) {
+                    throw IllegalStateException("EMPTY MODEL TEXT • ${apiResult.debug}")
+                }
 
                 val parsed = parsePokerResult(apiResult.text)
                 val visionSummary = apiResult.text
@@ -343,7 +348,7 @@ Important screenshot rules:
                         .putExtra(EXTRA_LATENCY_MS, elapsed)
                         .putExtra(EXTRA_IMAGE_KB, imageKb)
                         .putExtra(EXTRA_HTTP_CODE, httpCode)
-                        .putExtra(EXTRA_RAW_RESPONSE, apiResult.text.take(600))
+                        .putExtra(EXTRA_RAW_RESPONSE, (apiResult.text + "  [" + apiResult.debug + "]").take(900))
                         .putExtra(EXTRA_VISION_SUMMARY, visionSummary.take(500))
                 )
             } catch (e: ApiHttpException) {
@@ -408,7 +413,11 @@ Important screenshot rules:
         )
     }
 
-    private data class ApiResult(val text: String, val httpCode: Int)
+    private data class ApiResult(
+        val text: String,
+        val httpCode: Int,
+        val debug: String
+    )
 
     private class ApiHttpException(
         val httpCode: Int,
@@ -452,9 +461,34 @@ Important screenshot rules:
                 throw ApiHttpException(code, message ?: "OpenAI error HTTP $code")
             }
 
+            val root = JSONObject(response)
+            val outputText = extractOutputText(root)
+            val status = root.optString("status", "?")
+            val incompleteReason = root.optJSONObject("incomplete_details")
+                ?.optString("reason")
+                ?.takeIf { it.isNotBlank() }
+                ?: "-"
+            val usage = root.optJSONObject("usage")
+            val outputTokens = usage?.optInt("output_tokens", -1) ?: -1
+            val reasoningTokens = usage
+                ?.optJSONObject("output_tokens_details")
+                ?.optInt("reasoning_tokens", -1)
+                ?: -1
+            val output = root.optJSONArray("output")
+            val outputTypes = mutableListOf<String>()
+            if (output != null) {
+                for (i in 0 until output.length()) {
+                    output.optJSONObject(i)?.optString("type")
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { outputTypes += it }
+                }
+            }
+            val debug = "status=$status; incomplete=$incompleteReason; outTok=$outputTokens; reasoningTok=$reasoningTokens; types=${outputTypes.joinToString(",")}"
+
             return ApiResult(
-                text = extractOutputText(JSONObject(response)),
-                httpCode = code
+                text = outputText,
+                httpCode = code,
+                debug = debug
             )
         } finally {
             connection.disconnect()

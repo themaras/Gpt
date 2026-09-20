@@ -111,6 +111,12 @@ class ChatGptAccessibilityService : AccessibilityService() {
 
         val composer = findComposer(root)
         if (composer == null) {
+            // Gemini and Claude sometimes expose their Compose input as a generic
+            // container instead of an EditText. In that case long-press the expected
+            // composer area inside the app window and use Android's Paste menu.
+            if (selectedAiTarget() != AiTarget.CHATGPT && !longPressTried && tryGeometricPaste(root)) {
+                return
+            }
             retryPaste()
             return
         }
@@ -144,6 +150,32 @@ class ChatGptAccessibilityService : AccessibilityService() {
         } else {
             retryPaste()
         }
+    }
+
+    private fun tryGeometricPaste(root: AccessibilityNodeInfo): Boolean {
+        val b = Rect().also { root.getBoundsInScreen(it) }
+        if (b.width() <= 0 || b.height() <= 0) return false
+
+        val density = resources.displayMetrics.density
+        val bottomInsetDp = when (selectedAiTarget()) {
+            AiTarget.GEMINI -> 82f
+            AiTarget.CLAUDE -> 76f
+            AiTarget.CHATGPT -> 80f
+        }
+        val x = b.left + b.width() * 0.45f
+        val y = (b.bottom - bottomInsetDp * density).coerceAtLeast(b.top + 1f)
+
+        longPressTried = true
+        if (!longPress(x, y)) {
+            longPressTried = false
+            return false
+        }
+
+        handler.postDelayed(
+            { clickPasteMenuIfVisible() },
+            ViewConfiguration.getLongPressTimeout().toLong() + 140L
+        )
+        return true
     }
 
     private fun clickPasteMenuIfVisible() {

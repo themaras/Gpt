@@ -26,6 +26,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var resultMeta: TextView
     private lateinit var latency: TextView
     private lateinit var requestInfo: TextView
+    private lateinit var boardText: TextView
+    private lateinit var strategyText: TextView
     private lateinit var capButton: Button
     private var captureStarted = false
 
@@ -67,6 +69,8 @@ class MainActivity : AppCompatActivity() {
                     resultAction.text =
                         intent.getStringExtra(CaptureService.EXTRA_ACTION_TEXT) ?: "UNCLEAR"
                     resultMeta.text = intent.getStringExtra(CaptureService.EXTRA_META) ?: ""
+                    boardText.text = "BOARD: " + (intent.getStringExtra(CaptureService.EXTRA_BOARD) ?: "?")
+                    strategyText.text = intent.getStringExtra(CaptureService.EXTRA_STRATEGY) ?: ""
                     val ms = intent.getLongExtra(CaptureService.EXTRA_LATENCY_MS, 0L)
                     latency.text = if (ms > 0) String.format("%.1f sec", ms / 1000.0) else ""
                     apiStatus.text = if (http > 0) "API: RESPONSE OK • HTTP $http" else "API: RESPONSE OK"
@@ -78,6 +82,8 @@ class MainActivity : AppCompatActivity() {
                     resultAction.text = "RETRY"
                     resultMeta.text =
                         intent.getStringExtra(CaptureService.EXTRA_ERROR) ?: "Request failed"
+                    boardText.text = ""
+                    strategyText.text = ""
                     val ms = intent.getLongExtra(CaptureService.EXTRA_LATENCY_MS, 0L)
                     latency.text = if (ms > 0) String.format("%.1f sec", ms / 1000.0) else ""
                     apiStatus.text = if (http > 0) "API: ERROR HTTP $http" else "API: ERROR"
@@ -121,6 +127,8 @@ class MainActivity : AppCompatActivity() {
         resultMeta = findViewById(R.id.resultMeta)
         latency = findViewById(R.id.latency)
         requestInfo = findViewById(R.id.requestInfo)
+        boardText = findViewById(R.id.boardText)
+        strategyText = findViewById(R.id.strategyText)
         capButton = findViewById(R.id.capButton)
 
         val prefs = getSharedPreferences("capture", MODE_PRIVATE)

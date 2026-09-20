@@ -50,29 +50,29 @@ class CaptureService : Service() {
         private const val CHANNEL = "capture"
         private const val MODEL = "gpt-5.6-luna"
 
-        private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament hand using ALL 3 images of the same moment:
-1) FULL TABLE = overall context, board, pot, stacks, bets and current action.
-2) HERO ZOOM = Hero hole cards + action buttons. TRUST THIS MOST for Hero cards and exact call/bet/raise sizes.
-3) TABLE ZOOM = seats + dealer-button area. TRUST THIS MOST for position.
+        private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament screenshot.
+
+The image is the COMPLETE selected PokerStars region exactly as captured by the app.
+Hero is the bottom-center player with the two face-up hole cards.
 
 POSITION DETECTION — MUST FOLLOW THIS ORDER:
-A. Hero is the bottom-center player with the two face-up hole cards.
-B. Find the actual dealer/button marker. On this PokerStars theme it is the small red/white circular marker with a spade symbol next to one player.
-C. Identify only seats actually dealt into the current hand.
+A. Find Hero at bottom-center.
+B. Find the actual dealer/button marker: the small red/white circular marker with a spade symbol next to one player.
+C. Count only seats actually dealt into the current hand.
 D. Starting from the dealer button and moving clockwise, assign positions from the active seats.
 For 6-handed: BTN, SB, BB, UTG, HJ, CO.
 For 5-handed: BTN, SB, BB, UTG, CO.
 For 4-handed: BTN, SB, BB, CO.
 For 3-handed: BTN, SB, BB.
 Heads-up: BTN/SB, BB.
-NEVER infer Hero's position from where Hero sits on the screen.
+NEVER infer Hero position from screen location alone.
 Do not confuse avatars, bounty icons, blind chips, country flags or action chips with the dealer button.
-If the dealer marker cannot be located reliably, POSITION=? rather than guessing.
+If dealer/button is not reliable, POSITION=? rather than guessing.
 
 STRATEGY:
-Give a practical low-stakes tournament recommendation based on effective stack, position, prior action, pot odds, board texture and visible opponent action.
+Use effective stack, position, prior action, pot odds, board texture and visible opponent action.
 Do not default to CALL or BET. Consider FOLD, CHECK and RAISE normally.
-For strong value hands, prefer appropriate value aggression when warranted.
+For strong value hands, use appropriate value aggression.
 For weak hands facing meaningful action, fold when calling is not justified.
 Never invent unreadable values.
 
@@ -81,10 +81,11 @@ ACTION|SIZE|POSITION|HAND|STACK|BOARD|STRATEGY|CONFIDENCE
 
 ACTION: FOLD,CHECK,CALL,BET,RAISE,ALL-IN,UNCLEAR.
 SIZE: chip amount for CALL/BET/RAISE when applicable, otherwise -.
+POSITION: BTN,SB,BB,UTG,HJ,CO or ?.
 HAND: compact cards, e.g. Td9h.
 STACK: effective stack in BB if reliable, otherwise ?.
 BOARD: compact board, e.g. Ac4h2d or PREFLOP.
-STRATEGY: maximum 6 words, e.g. Value raise; Weak hand fold; Check and evaluate.
+STRATEGY: maximum 6 words.
 CONFIDENCE: HIGH,MEDIUM,LOW.
 No explanation beyond that one line."""
     }
@@ -249,25 +250,16 @@ No explanation beyond that one line."""
                 val apiKey = ApiKeyStore.read(this)
                     ?: throw IllegalStateException("OpenAI API key is missing")
 
-                val fullCrop = cropPokerSide(frame)
+                val region = cropPokerSide(frame)
                 frame.recycle()
 
-                val full = resizeForVision(fullCrop, 1600)
-                if (full !== fullCrop) fullCrop.recycle()
+                val full = resizeForVision(region, 1800)
+                if (full !== region) region.recycle()
 
-                val heroZoom = cropHeroAndActions(full)
-                val tableZoom = cropTableAndSeats(full)
-
-                val fullJpeg = encodeJpeg(full, 78)
-                val heroJpeg = encodeJpeg(heroZoom, 90)
-                val tableJpeg = encodeJpeg(tableZoom, 88)
-
+                val jpegBytes = encodeJpeg(full, 84)
                 full.recycle()
-                heroZoom.recycle()
-                tableZoom.recycle()
 
-                imageKb = ((fullJpeg.size + heroJpeg.size + tableJpeg.size + 1023) / 1024)
-                    .coerceAtLeast(1)
+                imageKb = ((jpegBytes.size + 1023) / 1024).coerceAtLeast(1)
 
                 val prefs = getSharedPreferences("capture", MODE_PRIVATE)
                 prefs.edit()
@@ -277,17 +269,17 @@ No explanation beyond that one line."""
 
                 sendState("SENDING", imageKb = imageKb)
 
-                fun dataUrl(bytes: ByteArray): String =
-                    "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+                val imageData =
+                    "data:image/jpeg;base64," + Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
 
                 val content = JSONArray()
                     .put(JSONObject().put("type", "input_text").put("text", POKER_PROMPT))
-                    .put(JSONObject().put("type", "input_text").put("text", "IMAGE 1: FULL TABLE"))
-                    .put(JSONObject().put("type", "input_image").put("image_url", dataUrl(fullJpeg)).put("detail", "high"))
-                    .put(JSONObject().put("type", "input_text").put("text", "IMAGE 2: HERO CARDS + ACTION BUTTONS ZOOM"))
-                    .put(JSONObject().put("type", "input_image").put("image_url", dataUrl(heroJpeg)).put("detail", "high"))
-                    .put(JSONObject().put("type", "input_text").put("text", "IMAGE 3: TABLE + SEATS + DEALER BUTTON ZOOM"))
-                    .put(JSONObject().put("type", "input_image").put("image_url", dataUrl(tableJpeg)).put("detail", "high"))
+                    .put(
+                        JSONObject()
+                            .put("type", "input_image")
+                            .put("image_url", imageData)
+                            .put("detail", "high")
+                    )
 
                 val body = JSONObject().apply {
                     put("model", MODEL)
@@ -328,8 +320,8 @@ No explanation beyond that one line."""
                 }
 
                 val metaParts = mutableListOf<String>()
-                if (parsed.hand != "?") metaParts += parsed.hand
-                if (parsed.position != "?") metaParts += parsed.position
+                if (parsed.hand != "?") metaParts += formatCards(parsed.hand)
+                if (parsed.position != "?") metaParts += formatPosition(parsed.position)
                 if (parsed.stack != "?") metaParts += parsed.stack
                 if (parsed.confidence.isNotBlank()) metaParts += parsed.confidence
 
@@ -342,7 +334,7 @@ No explanation beyond that one line."""
                         .putExtra(EXTRA_LATENCY_MS, elapsed)
                         .putExtra(EXTRA_IMAGE_KB, imageKb)
                         .putExtra(EXTRA_HTTP_CODE, httpCode)
-                        .putExtra(EXTRA_BOARD, parsed.board)
+                        .putExtra(EXTRA_BOARD, formatCards(parsed.board))
                         .putExtra(EXTRA_STRATEGY, parsed.strategy)
                 )
             } catch (e: ApiHttpException) {
@@ -392,22 +384,6 @@ No explanation beyond that one line."""
                 bitmap.height
             )
         }
-    }
-
-    private fun cropHeroAndActions(bitmap: Bitmap): Bitmap {
-        val x = (bitmap.width * 0.20f).roundToInt()
-        val y = (bitmap.height * 0.58f).roundToInt()
-        val w = (bitmap.width * 0.60f).roundToInt().coerceAtMost(bitmap.width - x)
-        val h = (bitmap.height * 0.42f).roundToInt().coerceAtMost(bitmap.height - y)
-        return Bitmap.createBitmap(bitmap, x, y, w.coerceAtLeast(1), h.coerceAtLeast(1))
-    }
-
-    private fun cropTableAndSeats(bitmap: Bitmap): Bitmap {
-        val x = (bitmap.width * 0.04f).roundToInt()
-        val y = (bitmap.height * 0.16f).roundToInt()
-        val w = (bitmap.width * 0.92f).roundToInt().coerceAtMost(bitmap.width - x)
-        val h = (bitmap.height * 0.70f).roundToInt().coerceAtMost(bitmap.height - y)
-        return Bitmap.createBitmap(bitmap, x, y, w.coerceAtLeast(1), h.coerceAtLeast(1))
     }
 
     private fun encodeJpeg(bitmap: Bitmap, quality: Int): ByteArray =
@@ -533,6 +509,35 @@ No explanation beyond that one line."""
             strategy = p[6],
             confidence = p[7].uppercase()
         )
+    }
+
+    private fun formatCards(raw: String): String {
+        if (raw == "?" || raw.equals("PREFLOP", true)) return raw.uppercase()
+        val normalized = raw.replace("10", "T").replace(" ", "")
+        val cardRegex = Regex("([2-9TJQKA])([cdhs])", RegexOption.IGNORE_CASE)
+        val cards = cardRegex.findAll(normalized).map { m ->
+            val rank = m.groupValues[1].uppercase()
+            val suit = when (m.groupValues[2].lowercase()) {
+                "c" -> "♣"
+                "d" -> "♦"
+                "h" -> "♥"
+                "s" -> "♠"
+                else -> ""
+            }
+            rank + suit
+        }.toList()
+        return if (cards.isNotEmpty()) cards.joinToString(" ") else raw
+    }
+
+    private fun formatPosition(raw: String): String = when (raw.trim().uppercase()) {
+        "BTN", "BUTTON" -> "BUTTON"
+        "SB" -> "SMALL BLIND"
+        "BB" -> "BIG BLIND"
+        "UTG" -> "UNDER THE GUN"
+        "HJ" -> "HIJACK"
+        "CO" -> "CUTOFF"
+        "BTN/SB", "SB/BTN" -> "BUTTON / SMALL BLIND"
+        else -> raw
     }
 
     private fun sendState(

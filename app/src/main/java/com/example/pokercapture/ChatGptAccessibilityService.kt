@@ -17,6 +17,7 @@ class ChatGptAccessibilityService : AccessibilityService() {
         private const val CHATGPT_PACKAGE = "com.openai.chatgpt"
         private const val GEMINI_PACKAGE = "com.google.android.apps.bard"
         private const val CLAUDE_PACKAGE = "com.anthropic.claude"
+        private const val CHROME_PACKAGE = "com.android.chrome"
 
         fun pasteAndSend(): Boolean {
             val service = instance ?: return false
@@ -54,8 +55,8 @@ class ChatGptAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!active) return
         val pkg = event?.packageName?.toString().orEmpty()
-        val targetPackage = selectedAiPackage()
-        if (pkg != targetPackage && pkg != "android" && pkg != "com.android.systemui") return
+        val targetPackages = selectedAiPackages()
+        if (pkg !in targetPackages && pkg != "android" && pkg != "com.android.systemui") return
 
         if (longPressTried) {
             handler.postDelayed({ clickPasteMenuIfVisible() }, 40)
@@ -77,6 +78,14 @@ class ChatGptAccessibilityService : AccessibilityService() {
             AiTarget.GEMINI -> GEMINI_PACKAGE
             AiTarget.CLAUDE -> CLAUDE_PACKAGE
             AiTarget.CHATGPT -> CHATGPT_PACKAGE
+        }
+    }
+
+    private fun selectedAiPackages(): Set<String> {
+        return when (selectedAiTarget()) {
+            AiTarget.GEMINI -> setOf(GEMINI_PACKAGE, CHROME_PACKAGE)
+            AiTarget.CLAUDE -> setOf(CLAUDE_PACKAGE, CHROME_PACKAGE)
+            AiTarget.CHATGPT -> setOf(CHATGPT_PACKAGE, CHROME_PACKAGE)
         }
     }
 
@@ -243,13 +252,15 @@ class ChatGptAccessibilityService : AccessibilityService() {
     }
 
     private fun targetRoot(): AccessibilityNodeInfo? {
-        val targetPackage = selectedAiPackage()
+        val targetPackages = selectedAiPackages()
         val activeRoot = rootInActiveWindow
-        if (activeRoot?.packageName?.toString() == targetPackage) return activeRoot
+        if (activeRoot?.packageName?.toString() in targetPackages) return activeRoot
 
+        // In split screen the browser is often not the active window after CAP is
+        // touched. Search all interactive windows for the selected AI app or Chrome.
         for (window in windows) {
             val root = window.root ?: continue
-            if (root.packageName?.toString() == targetPackage) return root
+            if (root.packageName?.toString() in targetPackages) return root
         }
         return null
     }
@@ -297,6 +308,7 @@ class ChatGptAccessibilityService : AccessibilityService() {
 
         data class Candidate(val node: AccessibilityNodeInfo, val bounds: Rect, val score: Int)
 
+        val rootBounds = Rect().also { root.getBoundsInScreen(it) }
         val hints = composerHints()
         val candidates = ArrayList<Candidate>()
         val q = java.util.ArrayDeque<AccessibilityNodeInfo>()
@@ -312,6 +324,16 @@ class ChatGptAccessibilityService : AccessibilityService() {
                 var score = 0
                 if (n.isEditable) score += 100
                 if (className.contains("EditText", true)) score += 90
+
+                // Do not mistake Chrome's URL/search bar for the AI composer.
+                val chromeAddressBar = root.packageName?.toString() == CHROME_PACKAGE && (
+                    haystack.contains("search or type web address") ||
+                    haystack.contains("address bar") ||
+                    haystack.contains("gemini.google.com/") ||
+                    haystack.contains("claude.ai/") ||
+                    haystack.contains("chatgpt.com/")
+                )
+                if (chromeAddressBar) score -= 250
                 if (n.isFocusable) score += 15
                 if (n.isFocused) score += 45
                 if (n.actionList.any { it.id == AccessibilityNodeInfo.ACTION_PASTE }) score += 40
@@ -319,7 +341,10 @@ class ChatGptAccessibilityService : AccessibilityService() {
 
                 // All three apps keep their composer near the bottom of their own window.
                 if (score > 0) {
-                    score += (b.bottom / 100)
+                    // Prefer controls low inside the selected split-screen window, not
+                    // merely low on the physical display.
+                    val relativeBottom = (b.bottom - rootBounds.top).coerceAtLeast(0)
+                    score += relativeBottom / 40
                     candidates.add(Candidate(n, b, score))
                 }
             }

@@ -29,6 +29,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var latency: TextView
     private lateinit var requestInfo: TextView
     private lateinit var rawResponse: TextView
+    private lateinit var visionSummary: TextView
     private lateinit var capButton: Button
     private lateinit var capturePreview: ImageView
     private var captureStarted = false
@@ -75,6 +76,7 @@ class MainActivity : AppCompatActivity() {
                     val ms = intent.getLongExtra(CaptureService.EXTRA_LATENCY_MS, 0L)
                     latency.text = if (ms > 0) String.format("%.1f sec", ms / 1000.0) else ""
                     apiStatus.text = if (http > 0) "API: RESPONSE OK • HTTP $http" else "API: RESPONSE OK"
+                    visionSummary.text = "AI SEES: " + (intent.getStringExtra(CaptureService.EXTRA_VISION_SUMMARY) ?: "—")
                     rawResponse.text = "RAW: " + (intent.getStringExtra(CaptureService.EXTRA_RAW_RESPONSE) ?: "—")
                     updateRequestInfo()
                 }
@@ -128,6 +130,7 @@ class MainActivity : AppCompatActivity() {
         latency = findViewById(R.id.latency)
         requestInfo = findViewById(R.id.requestInfo)
         rawResponse = findViewById(R.id.rawResponse)
+        visionSummary = findViewById(R.id.visionSummary)
         capButton = findViewById(R.id.capButton)
         capturePreview = findViewById(R.id.capturePreview)
 

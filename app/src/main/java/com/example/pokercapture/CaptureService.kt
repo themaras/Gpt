@@ -42,6 +42,8 @@ class CaptureService : Service() {
         const val EXTRA_META = "meta"
         const val EXTRA_ERROR = "error"
         const val EXTRA_LATENCY_MS = "latencyMs"
+        const val EXTRA_IMAGE_KB = "imageKb"
+        const val EXTRA_HTTP_CODE = "httpCode"
 
         private const val CHANNEL = "capture"
         private const val MODEL = "gpt-5.6-luna"
@@ -96,6 +98,7 @@ Important screenshot rules:
         when (intent?.action) {
             ACTION_STOP -> {
                 stopCapture()
+                sendState("STOPPED")
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -121,72 +124,87 @@ Important screenshot rules:
 
         val code = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
         val data: Intent = if (Build.VERSION.SDK_INT >= 33) {
-            intent.getParcelableExtra(EXTRA_DATA, Intent::class.java) ?: return
+            intent.getParcelableExtra(EXTRA_DATA, Intent::class.java) ?: run {
+                sendError("Android did not return screen-capture data", System.currentTimeMillis())
+                return
+            }
         } else {
-            intent.getParcelableExtra(EXTRA_DATA) ?: return
-        }
-
-        val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        projection = mgr.getMediaProjection(code, data)
-
-        projectionCallback = object : MediaProjection.Callback() {
-            override fun onStop() {
-                reader?.close()
-                reader = null
-                virtualDisplay?.release()
-                virtualDisplay = null
-                projection = null
-                synchronized(latestFrameLock) {
-                    latestFrame?.recycle()
-                    latestFrame = null
-                }
+            intent.getParcelableExtra(EXTRA_DATA) ?: run {
+                sendError("Android did not return screen-capture data", System.currentTimeMillis())
+                return
             }
         }
-        projection!!.registerCallback(projectionCallback!!, Handler(Looper.getMainLooper()))
 
-        val dm = resources.displayMetrics
-        val width = dm.widthPixels
-        val height = dm.heightPixels
+        try {
+            val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            projection = mgr.getMediaProjection(code, data)
 
-        reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-        virtualDisplay = projection!!.createVirtualDisplay(
-            "PokerCapture",
-            width,
-            height,
-            dm.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            reader!!.surface,
-            null,
-            null
-        )
-
-        reader!!.setOnImageAvailableListener({ r ->
-            val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
-            try {
-                val plane = image.planes[0]
-                val buffer = plane.buffer
-                val pixelStride = plane.pixelStride
-                val rowStride = plane.rowStride
-                val rowPadding = rowStride - pixelStride * image.width
-
-                val padded = Bitmap.createBitmap(
-                    image.width + rowPadding / pixelStride,
-                    image.height,
-                    Bitmap.Config.ARGB_8888
-                )
-                padded.copyPixelsFromBuffer(buffer)
-
-                val clean = Bitmap.createBitmap(padded, 0, 0, image.width, image.height)
-                padded.recycle()
-
-                synchronized(latestFrameLock) {
-                    latestFrame?.recycle()
-                    latestFrame = clean
+            projectionCallback = object : MediaProjection.Callback() {
+                override fun onStop() {
+                    reader?.close()
+                    reader = null
+                    virtualDisplay?.release()
+                    virtualDisplay = null
+                    projection = null
+                    synchronized(latestFrameLock) {
+                        latestFrame?.recycle()
+                        latestFrame = null
+                    }
+                    sendState("STOPPED")
                 }
-            } finally {
-                image.close()
             }
-        }, null)
+            projection!!.registerCallback(projectionCallback!!, Handler(Looper.getMainLooper()))
+
+            val dm = resources.displayMetrics
+            val width = dm.widthPixels
+            val height = dm.heightPixels
+
+            reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+            virtualDisplay = projection!!.createVirtualDisplay(
+                "PokerCapture",
+                width,
+                height,
+                dm.densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                reader!!.surface,
+                null,
+                null
+            )
+
+            reader!!.setOnImageAvailableListener({ r ->
+                val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
+                try {
+                    val plane = image.planes[0]
+                    val buffer = plane.buffer
+                    val pixelStride = plane.pixelStride
+                    val rowStride = plane.rowStride
+                    val rowPadding = rowStride - pixelStride * image.width
+
+                    val padded = Bitmap.createBitmap(
+                        image.width + rowPadding / pixelStride,
+                        image.height,
+                        Bitmap.Config.ARGB_8888
+                    )
+                    padded.copyPixelsFromBuffer(buffer)
+
+                    val clean = Bitmap.createBitmap(padded, 0, 0, image.width, image.height)
+                    padded.recycle()
+
+                    synchronized(latestFrameLock) {
+                        latestFrame?.recycle()
+                        latestFrame = clean
+                    }
+                } finally {
+                    image.close()
+                }
+            }, null)
+
+            sendState("CAPTURE_READY")
+        } catch (e: SecurityException) {
+            sendError("Android blocked screen capture for security reasons", System.currentTimeMillis())
+        } catch (e: Exception) {
+            sendError(cleanError(e.message), System.currentTimeMillis())
+        }
     }
 
     private fun analyzeLatestFrame() {
@@ -201,17 +219,20 @@ Important screenshot rules:
 
         if (frame == null) {
             analyzing.set(false)
-            sendError("No captured frame yet. Tap CAP again.", started)
+            sendError("No captured frame. Screen capture is not active yet.", started)
             return
         }
 
         Thread {
+            var imageKb = 0
+            var httpCode = 0
             try {
                 val apiKey = ApiKeyStore.read(this)
                     ?: throw IllegalStateException("OpenAI API key is missing")
 
                 val crop = cropPokerSide(frame)
                 frame.recycle()
+
                 val optimized = resizeForVision(crop)
                 if (optimized !== crop) crop.recycle()
 
@@ -220,6 +241,16 @@ Important screenshot rules:
                     out.toByteArray()
                 }
                 optimized.recycle()
+
+                imageKb = ((jpegBytes.size + 1023) / 1024).coerceAtLeast(1)
+
+                val prefs = getSharedPreferences("capture", MODE_PRIVATE)
+                prefs.edit()
+                    .putInt("api_request_count", prefs.getInt("api_request_count", 0) + 1)
+                    .putLong("api_last_request_at", System.currentTimeMillis())
+                    .apply()
+
+                sendState("SENDING", imageKb = imageKb)
 
                 val imageData =
                     "data:image/jpeg;base64," + Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
@@ -252,8 +283,10 @@ Important screenshot rules:
                     put("max_output_tokens", 80)
                 }
 
-                val text = callOpenAi(apiKey, body.toString())
-                val parsed = parsePokerResult(text)
+                val apiResult = callOpenAi(apiKey, body.toString(), imageKb)
+                httpCode = apiResult.httpCode
+
+                val parsed = parsePokerResult(apiResult.text)
                 val elapsed = System.currentTimeMillis() - started
 
                 val actionText = if (
@@ -283,11 +316,16 @@ Important screenshot rules:
                         .putExtra(EXTRA_ACTION_TEXT, actionText)
                         .putExtra(EXTRA_META, metaParts.joinToString(" • "))
                         .putExtra(EXTRA_LATENCY_MS, elapsed)
+                        .putExtra(EXTRA_IMAGE_KB, imageKb)
+                        .putExtra(EXTRA_HTTP_CODE, httpCode)
                 )
+            } catch (e: ApiHttpException) {
+                httpCode = e.httpCode
+                sendError(cleanError(e.message), started, imageKb, httpCode)
             } catch (e: SocketTimeoutException) {
-                sendError("API timeout — tap CAP again", started)
+                sendError("API timeout — tap CAP again", started, imageKb, httpCode)
             } catch (e: Exception) {
-                sendError(cleanError(e.message), started)
+                sendError(cleanError(e.message), started, imageKb, httpCode)
             } finally {
                 analyzing.set(false)
             }
@@ -343,7 +381,14 @@ Important screenshot rules:
         )
     }
 
-    private fun callOpenAi(apiKey: String, json: String): String {
+    private data class ApiResult(val text: String, val httpCode: Int)
+
+    private class ApiHttpException(
+        val httpCode: Int,
+        message: String
+    ) : Exception(message)
+
+    private fun callOpenAi(apiKey: String, json: String, imageKb: Int): ApiResult {
         val connection =
             (URL("https://api.openai.com/v1/responses").openConnection() as HttpURLConnection)
 
@@ -357,7 +402,11 @@ Important screenshot rules:
 
             connection.outputStream.use {
                 it.write(json.toByteArray(Charsets.UTF_8))
+                it.flush()
             }
+
+            sendState("REQUEST_SENT", imageKb = imageKb)
+            sendState("WAITING_API", imageKb = imageKb)
 
             val code = connection.responseCode
             val stream =
@@ -373,10 +422,13 @@ Important screenshot rules:
                 } catch (_: Exception) {
                     null
                 }
-                throw IllegalStateException(message ?: "OpenAI error HTTP $code")
+                throw ApiHttpException(code, message ?: "OpenAI error HTTP $code")
             }
 
-            return extractOutputText(JSONObject(response))
+            return ApiResult(
+                text = extractOutputText(JSONObject(response)),
+                httpCode = code
+            )
         } finally {
             connection.disconnect()
         }
@@ -430,21 +482,34 @@ Important screenshot rules:
         )
     }
 
-    private fun sendState(state: String) {
+    private fun sendState(
+        state: String,
+        imageKb: Int = 0,
+        httpCode: Int = 0
+    ) {
         sendBroadcast(
             Intent(ACTION_ANALYSIS_UPDATE)
                 .setPackage(packageName)
                 .putExtra(EXTRA_STATE, state)
+                .putExtra(EXTRA_IMAGE_KB, imageKb)
+                .putExtra(EXTRA_HTTP_CODE, httpCode)
         )
     }
 
-    private fun sendError(message: String, started: Long) {
+    private fun sendError(
+        message: String,
+        started: Long,
+        imageKb: Int = 0,
+        httpCode: Int = 0
+    ) {
         sendBroadcast(
             Intent(ACTION_ANALYSIS_UPDATE)
                 .setPackage(packageName)
                 .putExtra(EXTRA_STATE, "ERROR")
                 .putExtra(EXTRA_ERROR, message)
                 .putExtra(EXTRA_LATENCY_MS, System.currentTimeMillis() - started)
+                .putExtra(EXTRA_IMAGE_KB, imageKb)
+                .putExtra(EXTRA_HTTP_CODE, httpCode)
         )
     }
 

@@ -44,42 +44,28 @@ class CaptureService : Service() {
         const val EXTRA_LATENCY_MS = "latencyMs"
         const val EXTRA_IMAGE_KB = "imageKb"
         const val EXTRA_HTTP_CODE = "httpCode"
-        const val EXTRA_RAW_RESPONSE = "rawResponse"
-        const val EXTRA_VISION_SUMMARY = "visionSummary"
 
         private const val CHANNEL = "capture"
         private const val MODEL = "gpt-5.6-luna"
 
-        private const val POKER_PROMPT = """You analyze a poker table screenshot.
-Return exactly TWO lines and nothing else.
+        private const val POKER_PROMPT = """Analyze the poker hand using ALL 3 images of the same moment:
+1) FULL TABLE = overall context, board, pot, stacks, action.
+2) HERO ZOOM = Hero hole cards and current action buttons; trust this image most for Hero cards and call/bet/raise amounts.
+3) TABLE ZOOM = seats and dealer-button area; trust this image most for dealer/button and position.
 
-Line 1:
+Hero is the bottom-center player. Never infer position from screen location alone; use the dealer button and active seats.
+The PokerStars dealer button may appear as the small red/white spade marker next to a player.
+Never invent unreadable values. If position/stack is uncertain, use ? but still choose an action when Hero cards and current action are readable.
+
+Return exactly ONE line:
 ACTION|SIZE|POSITION|HAND|STACK|CONFIDENCE
 
-Line 2:
-SEES|HERO=<cards or ?>|BOARD=<cards or PREFLOP>|BUTTONS=<visible buttons>|POT=<value or ?>|DEALER=<location/seat or ?>
-
-The SEES line is diagnostic. Report only what is actually visible in the image.
-
-ACTION must be one of FOLD,CHECK,CALL,BET,RAISE,ALL-IN,UNCLEAR.
-SIZE is the chip amount for BET/RAISE/CALL when visible or useful; otherwise -.
-POSITION is Hero position, or ? if uncertain.
-HAND is Hero hole cards in compact notation, or ?.
-STACK is Hero effective stack in BB if reliably readable, otherwise ?.
-CONFIDENCE is HIGH,MEDIUM,LOW.
-
-Important screenshot rules:
-- This image is ALREADY cropped to the PokerStars half of the screen.
-- Hero is ALWAYS the bottom-center player with the two face-up hole cards directly above the action buttons.
-- The bottom row buttons (Fold / Check / Call / Raise To / Bet) are Hero's currently available actions and are reliable context.
-- First read Hero's two face-up cards, board cards, pot, blinds, visible bet/call amount and available action buttons.
-- Then find the dealer button. It may appear as a small red/white spade marker next to a player.
-- Determine position only if reliable. If position or stack is uncertain, use ? for that field BUT STILL choose an action.
-- NEVER output UNCLEAR merely because position, exact stack, opponent name, or dealer button is uncertain.
-- If Hero's two cards and at least one action button are visible, you MUST choose one of FOLD,CHECK,CALL,BET,RAISE,ALL-IN.
-- Use UNCLEAR only when Hero's cards or action buttons are genuinely not visible.
-- Do not invent exact numeric values you cannot read.
-- Be fast and concise."""
+ACTION: FOLD,CHECK,CALL,BET,RAISE,ALL-IN,UNCLEAR.
+SIZE: chip amount for CALL/BET/RAISE when applicable, otherwise -.
+HAND: compact cards, e.g. Td9h.
+STACK: effective stack in BB if reliable, otherwise ?.
+CONFIDENCE: HIGH,MEDIUM,LOW.
+No explanation."""
     }
 
     private var projection: MediaProjection? = null
@@ -242,26 +228,25 @@ Important screenshot rules:
                 val apiKey = ApiKeyStore.read(this)
                     ?: throw IllegalStateException("OpenAI API key is missing")
 
-                val crop = cropPokerSide(frame)
+                val fullCrop = cropPokerSide(frame)
                 frame.recycle()
 
-                val optimized = resizeForVision(crop)
-                if (optimized !== crop) crop.recycle()
+                val full = resizeForVision(fullCrop, 1600)
+                if (full !== fullCrop) fullCrop.recycle()
 
-                val jpegBytes = ByteArrayOutputStream().use { out ->
-                    optimized.compress(Bitmap.CompressFormat.JPEG, 84, out)
-                    out.toByteArray()
-                }
-                optimized.recycle()
+                val heroZoom = cropHeroAndActions(full)
+                val tableZoom = cropTableAndSeats(full)
 
-                imageKb = ((jpegBytes.size + 1023) / 1024).coerceAtLeast(1)
+                val fullJpeg = encodeJpeg(full, 78)
+                val heroJpeg = encodeJpeg(heroZoom, 90)
+                val tableJpeg = encodeJpeg(tableZoom, 88)
 
-                // Persist the exact JPEG bytes being sent to the API so the UI can preview
-                // the real MediaProjection crop. This is app-private and never goes to Gallery.
-                try {
-                    java.io.File(filesDir, "last_api_capture.jpg").writeBytes(jpegBytes)
-                } catch (_: Exception) {
-                }
+                full.recycle()
+                heroZoom.recycle()
+                tableZoom.recycle()
+
+                imageKb = ((fullJpeg.size + heroJpeg.size + tableJpeg.size + 1023) / 1024)
+                    .coerceAtLeast(1)
 
                 val prefs = getSharedPreferences("capture", MODE_PRIVATE)
                 prefs.edit()
@@ -271,52 +256,40 @@ Important screenshot rules:
 
                 sendState("SENDING", imageKb = imageKb)
 
-                val imageData =
-                    "data:image/jpeg;base64," + Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+                fun dataUrl(bytes: ByteArray): String =
+                    "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+
+                val content = JSONArray()
+                    .put(JSONObject().put("type", "input_text").put("text", POKER_PROMPT))
+                    .put(JSONObject().put("type", "input_text").put("text", "IMAGE 1: FULL TABLE"))
+                    .put(JSONObject().put("type", "input_image").put("image_url", dataUrl(fullJpeg)).put("detail", "high"))
+                    .put(JSONObject().put("type", "input_text").put("text", "IMAGE 2: HERO CARDS + ACTION BUTTONS ZOOM"))
+                    .put(JSONObject().put("type", "input_image").put("image_url", dataUrl(heroJpeg)).put("detail", "high"))
+                    .put(JSONObject().put("type", "input_text").put("text", "IMAGE 3: TABLE + SEATS + DEALER BUTTON ZOOM"))
+                    .put(JSONObject().put("type", "input_image").put("image_url", dataUrl(tableJpeg)).put("detail", "high"))
 
                 val body = JSONObject().apply {
                     put("model", MODEL)
                     put(
                         "input",
                         JSONArray().put(
-                            JSONObject().apply {
-                                put("role", "user")
-                                put(
-                                    "content",
-                                    JSONArray()
-                                        .put(
-                                            JSONObject()
-                                                .put("type", "input_text")
-                                                .put("text", POKER_PROMPT)
-                                        )
-                                        .put(
-                                            JSONObject()
-                                                .put("type", "input_image")
-                                                .put("image_url", imageData)
-                                                .put("detail", "high")
-                                        )
-                                )
-                            }
+                            JSONObject()
+                                .put("role", "user")
+                                .put("content", content)
                         )
                     )
                     put("reasoning", JSONObject().put("effort", "none"))
-                    put("max_output_tokens", 500)
+                    put("max_output_tokens", 80)
                 }
 
                 val apiResult = callOpenAi(apiKey, body.toString(), imageKb)
                 httpCode = apiResult.httpCode
 
                 if (apiResult.text.isBlank()) {
-                    throw IllegalStateException("EMPTY MODEL TEXT • ${apiResult.debug}")
+                    throw IllegalStateException("EMPTY MODEL TEXT")
                 }
 
                 val parsed = parsePokerResult(apiResult.text)
-                val visionSummary = apiResult.text
-                    .lineSequence()
-                    .firstOrNull { it.trim().startsWith("SEES|", ignoreCase = true) }
-                    ?.trim()
-                    ?.removePrefix("SEES|")
-                    ?: "No SEES line returned"
                 val elapsed = System.currentTimeMillis() - started
 
                 val actionText = if (
@@ -348,8 +321,6 @@ Important screenshot rules:
                         .putExtra(EXTRA_LATENCY_MS, elapsed)
                         .putExtra(EXTRA_IMAGE_KB, imageKb)
                         .putExtra(EXTRA_HTTP_CODE, httpCode)
-                        .putExtra(EXTRA_RAW_RESPONSE, (apiResult.text + "  [" + apiResult.debug + "]").take(900))
-                        .putExtra(EXTRA_VISION_SUMMARY, visionSummary.take(500))
                 )
             } catch (e: ApiHttpException) {
                 httpCode = e.httpCode
@@ -400,11 +371,33 @@ Important screenshot rules:
         }
     }
 
-    private fun resizeForVision(bitmap: Bitmap): Bitmap {
-        val maxDimension = max(bitmap.width, bitmap.height)
-        if (maxDimension <= 1800) return bitmap
+    private fun cropHeroAndActions(bitmap: Bitmap): Bitmap {
+        val x = (bitmap.width * 0.20f).roundToInt()
+        val y = (bitmap.height * 0.58f).roundToInt()
+        val w = (bitmap.width * 0.60f).roundToInt().coerceAtMost(bitmap.width - x)
+        val h = (bitmap.height * 0.42f).roundToInt().coerceAtMost(bitmap.height - y)
+        return Bitmap.createBitmap(bitmap, x, y, w.coerceAtLeast(1), h.coerceAtLeast(1))
+    }
 
-        val scale = 1800f / maxDimension.toFloat()
+    private fun cropTableAndSeats(bitmap: Bitmap): Bitmap {
+        val x = (bitmap.width * 0.04f).roundToInt()
+        val y = (bitmap.height * 0.16f).roundToInt()
+        val w = (bitmap.width * 0.92f).roundToInt().coerceAtMost(bitmap.width - x)
+        val h = (bitmap.height * 0.70f).roundToInt().coerceAtMost(bitmap.height - y)
+        return Bitmap.createBitmap(bitmap, x, y, w.coerceAtLeast(1), h.coerceAtLeast(1))
+    }
+
+    private fun encodeJpeg(bitmap: Bitmap, quality: Int): ByteArray =
+        ByteArrayOutputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+            out.toByteArray()
+        }
+
+    private fun resizeForVision(bitmap: Bitmap, targetMax: Int): Bitmap {
+        val maxDimension = max(bitmap.width, bitmap.height)
+        if (maxDimension <= targetMax) return bitmap
+
+        val scale = targetMax.toFloat() / maxDimension.toFloat()
         return Bitmap.createScaledBitmap(
             bitmap,
             (bitmap.width * scale).roundToInt().coerceAtLeast(1),
@@ -413,11 +406,7 @@ Important screenshot rules:
         )
     }
 
-    private data class ApiResult(
-        val text: String,
-        val httpCode: Int,
-        val debug: String
-    )
+    private data class ApiResult(val text: String, val httpCode: Int)
 
     private class ApiHttpException(
         val httpCode: Int,
@@ -462,33 +451,9 @@ Important screenshot rules:
             }
 
             val root = JSONObject(response)
-            val outputText = extractOutputText(root)
-            val status = root.optString("status", "?")
-            val incompleteReason = root.optJSONObject("incomplete_details")
-                ?.optString("reason")
-                ?.takeIf { it.isNotBlank() }
-                ?: "-"
-            val usage = root.optJSONObject("usage")
-            val outputTokens = usage?.optInt("output_tokens", -1) ?: -1
-            val reasoningTokens = usage
-                ?.optJSONObject("output_tokens_details")
-                ?.optInt("reasoning_tokens", -1)
-                ?: -1
-            val output = root.optJSONArray("output")
-            val outputTypes = mutableListOf<String>()
-            if (output != null) {
-                for (i in 0 until output.length()) {
-                    output.optJSONObject(i)?.optString("type")
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { outputTypes += it }
-                }
-            }
-            val debug = "status=$status; incomplete=$incompleteReason; outTok=$outputTokens; reasoningTok=$reasoningTokens; types=${outputTypes.joinToString(",")}"
-
             return ApiResult(
-                text = outputText,
-                httpCode = code,
-                debug = debug
+                text = extractOutputText(root),
+                httpCode = code
             )
         } finally {
             connection.disconnect()

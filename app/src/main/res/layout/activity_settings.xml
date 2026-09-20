@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="SETTINGS"
+        android:textSize="26sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/keyStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="API key: NOT SET"
+        android:textSize="16sp"
+        android:layout_marginTop="18dp" />
+
+    <EditText
+        android:id="@+id/apiKeyInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Paste OpenAI API key"
+        android:singleLine="true"
+        android:layout_marginTop="12dp" />
+
+    <Button
+        android:id="@+id/saveKeyButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="SAVE API KEY"
+        android:layout_marginTop="8dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="The key is encrypted with Android Keystore and is not stored in GitHub."
+        android:textSize="13sp"
+        android:layout_marginTop="10dp" />
+
+    <Button
+        android:id="@+id/doneButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="DONE"
+        android:layout_marginTop="24dp" />
+</LinearLayout>

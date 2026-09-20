@@ -44,6 +44,7 @@ class CaptureService : Service() {
         const val EXTRA_LATENCY_MS = "latencyMs"
         const val EXTRA_IMAGE_KB = "imageKb"
         const val EXTRA_HTTP_CODE = "httpCode"
+        const val EXTRA_RAW_RESPONSE = "rawResponse"
 
         private const val CHANNEL = "capture"
         private const val MODEL = "gpt-5.6-luna"
@@ -60,16 +61,16 @@ STACK is Hero effective stack in BB if reliably readable, otherwise ?.
 CONFIDENCE is HIGH,MEDIUM,LOW.
 
 Important screenshot rules:
-- Do not infer position from where Hero sits on screen.
-- Identify Hero from visible hole cards / Hero seat.
-- Locate the PokerStars dealer button. The button can appear as the small red/white spade marker next to a player.
-- Determine positions from the dealer button and active seats.
-- Read blinds, pot, prior action, opponent stacks, board and tournament context when visible.
-- Never invent unreadable information.
-- Do NOT require every field to be perfectly readable before choosing an action.
-- If Hero cards and the current decision context are readable, make the best action even if POSITION or STACK must be ?.
-- Use UNCLEAR only when the image itself is insufficient to identify Hero cards or the decision being faced.
-- The visible action buttons are strong context: for example, Check/Raise means Hero is facing no bet.
+- This image is ALREADY cropped to the PokerStars half of the screen.
+- Hero is ALWAYS the bottom-center player with the two face-up hole cards directly above the action buttons.
+- The bottom row buttons (Fold / Check / Call / Raise To / Bet) are Hero's currently available actions and are reliable context.
+- First read Hero's two face-up cards, board cards, pot, blinds, visible bet/call amount and available action buttons.
+- Then find the dealer button. It may appear as a small red/white spade marker next to a player.
+- Determine position only if reliable. If position or stack is uncertain, use ? for that field BUT STILL choose an action.
+- NEVER output UNCLEAR merely because position, exact stack, opponent name, or dealer button is uncertain.
+- If Hero's two cards and at least one action button are visible, you MUST choose one of FOLD,CHECK,CALL,BET,RAISE,ALL-IN.
+- Use UNCLEAR only when Hero's cards or action buttons are genuinely not visible.
+- Do not invent exact numeric values you cannot read.
 - Be fast and concise."""
     }
 
@@ -328,6 +329,7 @@ Important screenshot rules:
                         .putExtra(EXTRA_LATENCY_MS, elapsed)
                         .putExtra(EXTRA_IMAGE_KB, imageKb)
                         .putExtra(EXTRA_HTTP_CODE, httpCode)
+                        .putExtra(EXTRA_RAW_RESPONSE, apiResult.text.take(180))
                 )
             } catch (e: ApiHttpException) {
                 httpCode = e.httpCode

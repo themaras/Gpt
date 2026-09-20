@@ -67,27 +67,6 @@
             android:layout_marginTop="3dp" />
 
         <TextView
-            android:id="@+id/visionSummary"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="AI SEES: —"
-            android:textSize="13sp"
-            android:textStyle="bold"
-            android:padding="8dp"
-            android:maxLines="6"
-            android:layout_marginTop="4dp" />
-
-        <TextView
-            android:id="@+id/rawResponse"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center"
-            android:text="RAW: —"
-            android:textSize="11sp"
-            android:maxLines="6"
-            android:layout_marginTop="3dp" />
-
-        <TextView
             android:id="@+id/requestInfo"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -95,24 +74,6 @@
             android:text="Requests: 0 • Last: —"
             android:textSize="12sp"
             android:layout_marginTop="3dp" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="center"
-            android:text="EXACT IMAGE SENT TO API"
-            android:textSize="11sp"
-            android:textStyle="bold"
-            android:layout_marginTop="8dp" />
-
-        <ImageView
-            android:id="@+id/capturePreview"
-            android:layout_width="match_parent"
-            android:layout_height="170dp"
-            android:adjustViewBounds="true"
-            android:scaleType="fitCenter"
-            android:background="#111111"
-            android:contentDescription="Exact image sent to API" />
 
         <Button
             android:id="@+id/capButton"

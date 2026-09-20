@@ -8,8 +8,6 @@ import android.content.IntentFilter
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
-import android.graphics.BitmapFactory
-import android.widget.ImageView
 import android.widget.Button
 import android.widget.RadioButton
 import android.widget.RadioGroup
@@ -28,10 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var resultMeta: TextView
     private lateinit var latency: TextView
     private lateinit var requestInfo: TextView
-    private lateinit var rawResponse: TextView
-    private lateinit var visionSummary: TextView
     private lateinit var capButton: Button
-    private lateinit var capturePreview: ImageView
     private var captureStarted = false
 
     private val resultReceiver = object : BroadcastReceiver() {
@@ -58,7 +53,6 @@ class MainActivity : AppCompatActivity() {
                 "SENDING" -> {
                     resultMeta.text = if (imageKb > 0) "Image: ${imageKb} KB" else "Sending image"
                     apiStatus.text = "API: SENDING…"
-                    showLastCapturePreview()
                 }
                 "REQUEST_SENT" -> {
                     apiStatus.text = "API: REQUEST SENT ✓"
@@ -76,8 +70,6 @@ class MainActivity : AppCompatActivity() {
                     val ms = intent.getLongExtra(CaptureService.EXTRA_LATENCY_MS, 0L)
                     latency.text = if (ms > 0) String.format("%.1f sec", ms / 1000.0) else ""
                     apiStatus.text = if (http > 0) "API: RESPONSE OK • HTTP $http" else "API: RESPONSE OK"
-                    visionSummary.text = "AI SEES: " + (intent.getStringExtra(CaptureService.EXTRA_VISION_SUMMARY) ?: "—")
-                    rawResponse.text = "RAW: " + (intent.getStringExtra(CaptureService.EXTRA_RAW_RESPONSE) ?: "—")
                     updateRequestInfo()
                 }
                 "ERROR" -> {
@@ -129,10 +121,7 @@ class MainActivity : AppCompatActivity() {
         resultMeta = findViewById(R.id.resultMeta)
         latency = findViewById(R.id.latency)
         requestInfo = findViewById(R.id.requestInfo)
-        rawResponse = findViewById(R.id.rawResponse)
-        visionSummary = findViewById(R.id.visionSummary)
         capButton = findViewById(R.id.capButton)
-        capturePreview = findViewById(R.id.capturePreview)
 
         val prefs = getSharedPreferences("capture", MODE_PRIVATE)
         val cropGroup = findViewById<RadioGroup>(R.id.cropGroup)
@@ -188,19 +177,6 @@ class MainActivity : AppCompatActivity() {
 
         updateRequestInfo()
     }
-
-    private fun showLastCapturePreview() {
-        try {
-            val file = java.io.File(filesDir, "last_api_capture.jpg")
-            if (file.exists()) {
-                val bmp = BitmapFactory.decodeFile(file.absolutePath)
-                capturePreview.setImageBitmap(bmp)
-                capturePreview.contentDescription = "Exact image sent to API"
-            }
-        } catch (_: Exception) {
-        }
-    }
-
     private fun updateRequestInfo() {
         val prefs = getSharedPreferences("capture", MODE_PRIVATE)
         val count = prefs.getInt("api_request_count", 0)

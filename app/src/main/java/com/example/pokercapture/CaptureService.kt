@@ -48,7 +48,7 @@ class CaptureService : Service() {
         const val EXTRA_STRATEGY = "strategy"
 
         private const val CHANNEL = "capture"
-        private const val MODEL = "gpt-5.6-luna"
+        private const val MODEL = "gpt-5.6-sol"
 
         private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament screenshot.
 

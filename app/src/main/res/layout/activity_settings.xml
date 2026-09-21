@@ -1,51 +1,103 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="24dp">
-
-    <TextView
+    android:layout_height="match_parent">
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="SETTINGS"
-        android:textSize="26sp"
-        android:textStyle="bold" />
+        android:orientation="vertical"
+        android:padding="24dp">
 
-    <TextView
-        android:id="@+id/keyStatus"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="API key: NOT SET"
-        android:textSize="16sp"
-        android:layout_marginTop="18dp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="SETTINGS"
+            android:textSize="26sp"
+            android:textStyle="bold" />
 
-    <EditText
-        android:id="@+id/apiKeyInput"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="Paste OpenAI API key"
-        android:singleLine="true"
-        android:layout_marginTop="12dp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="AI provider"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:layout_marginTop="18dp" />
 
-    <Button
-        android:id="@+id/saveKeyButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="SAVE API KEY"
-        android:layout_marginTop="8dp" />
+        <RadioGroup
+            android:id="@+id/providerGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <RadioButton
+                android:id="@+id/providerGemini"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Gemini" />
+            <RadioButton
+                android:id="@+id/providerOpenAI"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="OpenAI" />
+        </RadioGroup>
 
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="The key is encrypted with Android Keystore and is not stored in GitHub."
-        android:textSize="13sp"
-        android:layout_marginTop="10dp" />
+        <TextView
+            android:id="@+id/geminiKeyStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Gemini key: NOT SET"
+            android:textSize="16sp"
+            android:layout_marginTop="18dp" />
 
-    <Button
-        android:id="@+id/doneButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="DONE"
-        android:layout_marginTop="24dp" />
-</LinearLayout>
+        <EditText
+            android:id="@+id/geminiKeyInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Paste Gemini API key"
+            android:singleLine="true"
+            android:layout_marginTop="8dp" />
+
+        <Button
+            android:id="@+id/saveGeminiKeyButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="SAVE GEMINI KEY"
+            android:layout_marginTop="6dp" />
+
+        <TextView
+            android:id="@+id/openAiKeyStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="OpenAI key: NOT SET"
+            android:textSize="16sp"
+            android:layout_marginTop="22dp" />
+
+        <EditText
+            android:id="@+id/openAiKeyInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Paste OpenAI API key"
+            android:singleLine="true"
+            android:layout_marginTop="8dp" />
+
+        <Button
+            android:id="@+id/saveOpenAiKeyButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="SAVE OPENAI KEY"
+            android:layout_marginTop="6dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Keys are encrypted with Android Keystore and are not stored in GitHub."
+            android:textSize="13sp"
+            android:layout_marginTop="14dp" />
+
+        <Button
+            android:id="@+id/doneButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="DONE"
+            android:layout_marginTop="24dp" />
+    </LinearLayout>
+</ScrollView>

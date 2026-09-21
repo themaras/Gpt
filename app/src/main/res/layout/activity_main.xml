@@ -118,7 +118,7 @@
             android:orientation="horizontal"
             android:gravity="center">
             <RadioButton android:id="@+id/cropLeft" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Left" />
-            <RadioButton android:id="@+id/cropRight" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Right" />
+            <RadioButton android:id="@+id/cropRight" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Right 2/3" />
             <RadioButton android:id="@+id/cropTop" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Top" />
             <RadioButton android:id="@+id/cropBottom" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Bottom" />
         </RadioGroup>
@@ -149,7 +149,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center"
-            android:text="Gemini • Gemini 3.8 Flash • 1 region image"
+            android:text="OpenAI • GPT-5.6 Luna • RIGHT 2/3 • top/bottom -15%"
             android:textSize="11sp"
             android:layout_marginTop="7dp" />
     </LinearLayout>

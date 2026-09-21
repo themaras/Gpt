@@ -29,6 +29,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var boardText: TextView
     private lateinit var strategyText: TextView
     private lateinit var capButton: Button
+    private lateinit var providerLabel: TextView
     private var captureStarted = false
 
     private val resultReceiver = object : BroadcastReceiver() {
@@ -130,6 +131,7 @@ class MainActivity : AppCompatActivity() {
         boardText = findViewById(R.id.boardText)
         strategyText = findViewById(R.id.strategyText)
         capButton = findViewById(R.id.capButton)
+        providerLabel = findViewById(R.id.providerLabel)
 
         val prefs = getSharedPreferences("capture", MODE_PRIVATE)
         val cropGroup = findViewById<RadioGroup>(R.id.cropGroup)

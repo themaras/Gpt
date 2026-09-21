@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Base64
+import android.util.DisplayMetrics
 import androidx.core.app.NotificationCompat
 import org.json.JSONArray
 import org.json.JSONObject
@@ -60,7 +61,7 @@ class CaptureService : Service() {
         private const val CHANNEL = "capture"
         private const val OPENAI_MODEL = "gpt-5.6-luna"
         private const val GEMINI_MODEL = "gemini-3.8-flash"
-        private const val PROMPT_VERSION = "debug_v1_fresh_png"
+        private const val PROMPT_VERSION = "debug_v2_real_display_png"
 
         private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament screenshot.
 
@@ -117,6 +118,10 @@ No explanation beyond that one line."""
     private val latestFrameLock = Any()
     private var latestFrame: Bitmap? = null
     private var latestFrameAtMs: Long = 0L
+    private var captureSurfaceWidth: Int = 0
+    private var captureSurfaceHeight: Int = 0
+    private var appWindowWidth: Int = 0
+    private var appWindowHeight: Int = 0
     private val analyzing = AtomicBoolean(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -196,16 +201,31 @@ No explanation beyond that one line."""
             }
             projection!!.registerCallback(projectionCallback!!, Handler(Looper.getMainLooper()))
 
-            val dm = resources.displayMetrics
-            val width = dm.widthPixels
-            val height = dm.heightPixels
+            // IMPORTANT: resources.displayMetrics is the CURRENT split-screen app pane
+            // (e.g. 435x800), not the physical display. Using it here downscaled the whole
+            // 1340x800 screen to 435px wide before vision ever saw it.
+            val windowDm = resources.displayMetrics
+            appWindowWidth = windowDm.widthPixels
+            appWindowHeight = windowDm.heightPixels
+
+            val realDm = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            val display = (getSystemService(DISPLAY_SERVICE) as DisplayManager)
+                .getDisplay(android.view.Display.DEFAULT_DISPLAY)
+            @Suppress("DEPRECATION")
+            display.getRealMetrics(realDm)
+
+            val width = realDm.widthPixels
+            val height = realDm.heightPixels
+            captureSurfaceWidth = width
+            captureSurfaceHeight = height
 
             reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
             virtualDisplay = projection!!.createVirtualDisplay(
                 "PokerCapture",
                 width,
                 height,
-                dm.densityDpi,
+                realDm.densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 reader!!.surface,
                 null,
@@ -385,7 +405,9 @@ No explanation beyond that one line."""
                     appendLine("CAP pressed: $capPressedAt")
                     appendLine("Frame time: $frameAt")
                     appendLine("Frame age at CAP: ${frameAgeMs} ms")
-                    appendLine("Original: ${originalW}x${originalH}")
+                    appendLine("App window metrics: ${appWindowWidth}x${appWindowHeight}")
+                    appendLine("Capture surface: ${captureSurfaceWidth}x${captureSurfaceHeight}")
+                    appendLine("Original frame: ${originalW}x${originalH}")
                     appendLine("Crop: $cropInfo")
                     appendLine("Final: ${finalW}x${finalH}")
                     appendLine("FORMAT: PNG lossless")

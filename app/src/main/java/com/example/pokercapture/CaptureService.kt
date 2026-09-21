@@ -21,6 +21,8 @@ import androidx.core.app.NotificationCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.security.MessageDigest
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
@@ -46,10 +48,19 @@ class CaptureService : Service() {
         const val EXTRA_HTTP_CODE = "httpCode"
         const val EXTRA_BOARD = "board"
         const val EXTRA_STRATEGY = "strategy"
+        const val EXTRA_DEBUG = "debug"
+        const val EXTRA_RAW = "raw"
+        const val EXTRA_REQUEST_ID = "requestId"
+        const val EXTRA_IMAGE_SHA = "imageSha"
+        const val EXTRA_FRAME_AGE_MS = "frameAgeMs"
+        const val EXTRA_FRESH_FRAME = "freshFrame"
+        const val EXTRA_CROP_INFO = "cropInfo"
+        const val EXTRA_TIMING = "timing"
 
         private const val CHANNEL = "capture"
         private const val OPENAI_MODEL = "gpt-5.6-luna"
         private const val GEMINI_MODEL = "gemini-3.8-flash"
+        private const val PROMPT_VERSION = "debug_v1_fresh_png"
 
         private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament screenshot.
 
@@ -105,6 +116,7 @@ No explanation beyond that one line."""
     private var virtualDisplay: VirtualDisplay? = null
     private val latestFrameLock = Any()
     private var latestFrame: Bitmap? = null
+    private var latestFrameAtMs: Long = 0L
     private val analyzing = AtomicBoolean(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -222,6 +234,7 @@ No explanation beyond that one line."""
                     synchronized(latestFrameLock) {
                         latestFrame?.recycle()
                         latestFrame = clean
+                        latestFrameAtMs = System.currentTimeMillis()
                     }
                 } finally {
                     image.close()
@@ -239,42 +252,65 @@ No explanation beyond that one line."""
     private fun analyzeLatestFrame() {
         if (!analyzing.compareAndSet(false, true)) return
 
-        val started = System.currentTimeMillis()
+        val capPressedAt = System.currentTimeMillis()
         sendState("ANALYZING")
-
-        val frame = synchronized(latestFrameLock) {
-            latestFrame?.copy(Bitmap.Config.ARGB_8888, false)
-        }
-
-        if (frame == null) {
-            analyzing.set(false)
-            sendError("No captured frame. Screen capture is not active yet.", started)
-            return
-        }
 
         Thread {
             var imageKb = 0
             var httpCode = 0
             try {
-                val provider = "OPENAI"
-                val apiKey = if (provider == "OPENAI") {
-                    ApiKeyStore.read(this)
-                        ?: throw IllegalStateException("OpenAI API key is missing")
-                } else {
-                    GeminiKeyStore.read(this)
-                        ?: throw IllegalStateException("Gemini API key is missing")
+                // Wait for a frame captured AFTER the CAP press. This avoids stale-frame analysis.
+                val freshDeadline = capPressedAt + 500L
+                var frame: Bitmap? = null
+                var frameAt = 0L
+                var freshFrame = false
+
+                while (System.currentTimeMillis() <= freshDeadline && frame == null) {
+                    synchronized(latestFrameLock) {
+                        if (latestFrame != null && latestFrameAtMs > capPressedAt) {
+                            frame = latestFrame!!.copy(Bitmap.Config.ARGB_8888, false)
+                            frameAt = latestFrameAtMs
+                            freshFrame = true
+                        }
+                    }
+                    if (frame == null) Thread.sleep(12)
                 }
 
-                val region = cropPokerSide(frame)
-                frame.recycle()
+                // Fallback only if Android did not deliver a fresh frame in time; mark it clearly in debug.
+                if (frame == null) {
+                    synchronized(latestFrameLock) {
+                        frame = latestFrame?.copy(Bitmap.Config.ARGB_8888, false)
+                        frameAt = latestFrameAtMs
+                    }
+                }
 
-                val full = resizeForVision(region, 1800)
-                if (full !== region) region.recycle()
+                val captured = frame
+                    ?: throw IllegalStateException("No captured frame. Screen capture is not active yet.")
 
-                val jpegBytes = encodeJpeg(full, 84)
-                full.recycle()
+                val provider = "OPENAI"
+                val apiKey = ApiKeyStore.read(this)
+                    ?: throw IllegalStateException("OpenAI API key is missing")
 
-                imageKb = ((jpegBytes.size + 1023) / 1024).coerceAtLeast(1)
+                val originalW = captured.width
+                val originalH = captured.height
+                val cropInfo = cropDescription(captured)
+                val region = cropPokerSide(captured)
+                captured.recycle()
+
+                val finalW = region.width
+                val finalH = region.height
+
+                // DEBUG BUILD: lossless PNG. These exact bytes are both previewed and sent to the API.
+                val encodeStarted = System.currentTimeMillis()
+                val imageBytes = encodePng(region)
+                region.recycle()
+                val encodeMs = System.currentTimeMillis() - encodeStarted
+
+                imageKb = ((imageBytes.size + 1023) / 1024).coerceAtLeast(1)
+                val imageSha = sha256(imageBytes)
+
+                // Save the EXACT bytes sent to the API for on-device visual verification.
+                File(cacheDir, "last_sent.png").writeBytes(imageBytes)
 
                 val prefs = getSharedPreferences("capture", MODE_PRIVATE)
                 prefs.edit()
@@ -284,65 +320,34 @@ No explanation beyond that one line."""
 
                 sendState("SENDING", imageKb = imageKb)
 
-                val base64Image = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+                val base64Image = Base64.encodeToString(imageBytes, Base64.NO_WRAP)
+                val imageData = "data:image/png;base64,$base64Image"
+                val content = JSONArray()
+                    .put(JSONObject().put("type", "input_text").put("text", POKER_PROMPT))
+                    .put(
+                        JSONObject()
+                            .put("type", "input_image")
+                            .put("image_url", imageData)
+                            .put("detail", "high")
+                    )
 
-                val apiResult = if (provider == "OPENAI") {
-                    val imageData = "data:image/jpeg;base64,$base64Image"
-                    val content = JSONArray()
-                        .put(JSONObject().put("type", "input_text").put("text", POKER_PROMPT))
-                        .put(
+                val body = JSONObject().apply {
+                    put("model", OPENAI_MODEL)
+                    put(
+                        "input",
+                        JSONArray().put(
                             JSONObject()
-                                .put("type", "input_image")
-                                .put("image_url", imageData)
-                                .put("detail", "high")
+                                .put("role", "user")
+                                .put("content", content)
                         )
-
-                    val body = JSONObject().apply {
-                        put("model", OPENAI_MODEL)
-                        put(
-                            "input",
-                            JSONArray().put(
-                                JSONObject()
-                                    .put("role", "user")
-                                    .put("content", content)
-                            )
-                        )
-                        put("reasoning", JSONObject().put("effort", "none"))
-                        put("max_output_tokens", 120)
-                    }
-                    callOpenAi(apiKey, body.toString(), imageKb)
-                } else {
-                    val parts = JSONArray()
-                        .put(JSONObject().put("text", POKER_PROMPT))
-                        .put(
-                            JSONObject().put(
-                                "inline_data",
-                                JSONObject()
-                                    .put("mime_type", "image/jpeg")
-                                    .put("data", base64Image)
-                            )
-                        )
-
-                    val body = JSONObject().apply {
-                        put(
-                            "contents",
-                            JSONArray().put(
-                                JSONObject().put("parts", parts)
-                            )
-                        )
-                        put(
-                            "generationConfig",
-                            JSONObject()
-                                .put("maxOutputTokens", 120)
-                                .put(
-                                    "thinkingConfig",
-                                    JSONObject().put("thinkingLevel", "low")
-                                )
-                        )
-                    }
-                    callGemini(apiKey, body.toString(), imageKb)
+                    )
+                    put("reasoning", JSONObject().put("effort", "none"))
+                    put("max_output_tokens", 120)
                 }
 
+                val apiStarted = System.currentTimeMillis()
+                val apiResult = callOpenAi(apiKey, body.toString(), imageKb)
+                val apiMs = System.currentTimeMillis() - apiStarted
                 httpCode = apiResult.httpCode
 
                 if (apiResult.text.isBlank()) {
@@ -350,7 +355,8 @@ No explanation beyond that one line."""
                 }
 
                 val parsed = parsePokerResult(apiResult.text)
-                val elapsed = System.currentTimeMillis() - started
+                val totalMs = System.currentTimeMillis() - capPressedAt
+                val frameAgeMs = (capPressedAt - frameAt).coerceAtLeast(0L)
 
                 val actionText = if (
                     parsed.action == "BET" ||
@@ -372,25 +378,53 @@ No explanation beyond that one line."""
                 if (parsed.stack != "?") metaParts += parsed.stack
                 if (parsed.confidence.isNotBlank()) metaParts += parsed.confidence
 
+                val debugText = buildString {
+                    appendLine("PROMPT: $PROMPT_VERSION")
+                    appendLine("PROVIDER/MODEL: OpenAI / $OPENAI_MODEL")
+                    appendLine("FRESH FRAME: $freshFrame")
+                    appendLine("CAP pressed: $capPressedAt")
+                    appendLine("Frame time: $frameAt")
+                    appendLine("Frame age at CAP: ${frameAgeMs} ms")
+                    appendLine("Original: ${originalW}x${originalH}")
+                    appendLine("Crop: $cropInfo")
+                    appendLine("Final: ${finalW}x${finalH}")
+                    appendLine("FORMAT: PNG lossless")
+                    appendLine("Image: ${imageKb} KB")
+                    appendLine("SHA-256: $imageSha")
+                    appendLine("HTTP: $httpCode")
+                    appendLine("Request ID: ${apiResult.requestId.ifBlank { "—" }}")
+                    appendLine("Timing: encode=${encodeMs}ms api=${apiMs}ms total=${totalMs}ms")
+                    appendLine("RAW: ${apiResult.text}")
+                    append("PARSED: action=${parsed.action}; size=${parsed.size}; pos=${parsed.position}; hand=${parsed.hand}; stack=${parsed.stack}; board=${parsed.board}; strategy=${parsed.strategy}; confidence=${parsed.confidence}")
+                }
+
                 sendBroadcast(
                     Intent(ACTION_ANALYSIS_UPDATE)
                         .setPackage(packageName)
                         .putExtra(EXTRA_STATE, "RESULT")
                         .putExtra(EXTRA_ACTION_TEXT, actionText)
                         .putExtra(EXTRA_META, metaParts.joinToString(" • "))
-                        .putExtra(EXTRA_LATENCY_MS, elapsed)
+                        .putExtra(EXTRA_LATENCY_MS, totalMs)
                         .putExtra(EXTRA_IMAGE_KB, imageKb)
                         .putExtra(EXTRA_HTTP_CODE, httpCode)
                         .putExtra(EXTRA_BOARD, formatCards(parsed.board))
                         .putExtra(EXTRA_STRATEGY, parsed.strategy)
+                        .putExtra(EXTRA_DEBUG, debugText)
+                        .putExtra(EXTRA_RAW, apiResult.text)
+                        .putExtra(EXTRA_REQUEST_ID, apiResult.requestId)
+                        .putExtra(EXTRA_IMAGE_SHA, imageSha)
+                        .putExtra(EXTRA_FRAME_AGE_MS, frameAgeMs)
+                        .putExtra(EXTRA_FRESH_FRAME, freshFrame)
+                        .putExtra(EXTRA_CROP_INFO, cropInfo)
+                        .putExtra(EXTRA_TIMING, "encode=${encodeMs}ms • api=${apiMs}ms • total=${totalMs}ms")
                 )
             } catch (e: ApiHttpException) {
                 httpCode = e.httpCode
-                sendError(cleanError(e.message), started, imageKb, httpCode)
+                sendError(cleanError(e.message), capPressedAt, imageKb, httpCode)
             } catch (e: SocketTimeoutException) {
-                sendError("API timeout — tap CAP again", started, imageKb, httpCode)
+                sendError("API timeout — tap CAP again", capPressedAt, imageKb, httpCode)
             } catch (e: Exception) {
-                sendError(cleanError(e.message), started, imageKb, httpCode)
+                sendError(cleanError(e.message), capPressedAt, imageKb, httpCode)
             } finally {
                 analyzing.set(false)
             }
@@ -434,6 +468,35 @@ No explanation beyond that one line."""
         }
     }
 
+    private fun cropDescription(bitmap: Bitmap): String {
+        val mode = getSharedPreferences("capture", MODE_PRIVATE)
+            .getString("crop_mode", "LEFT") ?: "LEFT"
+        return when (mode) {
+            "RIGHT" -> {
+                val x = bitmap.width / 3
+                val y = (bitmap.height * 0.15f).roundToInt()
+                val w = max(1, bitmap.width - x)
+                val h = max(1, (bitmap.height * 0.70f).roundToInt())
+                    .coerceAtMost(bitmap.height - y)
+                "RIGHT_2_3 x=$x y=$y w=$w h=$h"
+            }
+            "TOP" -> "TOP x=0 y=0 w=${bitmap.width} h=${max(1, bitmap.height / 2)}"
+            "BOTTOM" -> "BOTTOM x=0 y=${bitmap.height / 2} w=${bitmap.width} h=${max(1, bitmap.height - bitmap.height / 2)}"
+            else -> "LEFT x=0 y=0 w=${max(1, bitmap.width / 2)} h=${bitmap.height}"
+        }
+    }
+
+    private fun encodePng(bitmap: Bitmap): ByteArray =
+        ByteArrayOutputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            out.toByteArray()
+        }
+
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+
     private fun encodeJpeg(bitmap: Bitmap, quality: Int): ByteArray =
         ByteArrayOutputStream().use { out ->
             bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
@@ -453,7 +516,11 @@ No explanation beyond that one line."""
         )
     }
 
-    private data class ApiResult(val text: String, val httpCode: Int)
+    private data class ApiResult(
+        val text: String,
+        val httpCode: Int,
+        val requestId: String
+    )
 
     private class ApiHttpException(
         val httpCode: Int,
@@ -500,7 +567,8 @@ No explanation beyond that one line."""
             val root = JSONObject(response)
             return ApiResult(
                 text = extractOutputText(root),
-                httpCode = code
+                httpCode = code,
+                requestId = connection.getHeaderField("x-request-id").orEmpty()
             )
         } finally {
             connection.disconnect()
@@ -562,7 +630,7 @@ No explanation beyond that one line."""
                 .orEmpty()
                 .trim()
 
-            return ApiResult(text = text, httpCode = code)
+            return ApiResult(text = text, httpCode = code, requestId = "")
         } finally {
             connection.disconnect()
         }
@@ -691,6 +759,7 @@ No explanation beyond that one line."""
         synchronized(latestFrameLock) {
             latestFrame?.recycle()
             latestFrame = null
+            latestFrameAtMs = 0L
         }
         reader?.close()
         reader = null

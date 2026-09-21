@@ -8,6 +8,11 @@ import android.content.IntentFilter
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.graphics.BitmapFactory
+import android.view.View
+import android.widget.CheckBox
+import android.widget.ImageView
+import java.io.File
 import android.widget.Button
 import android.widget.RadioButton
 import android.widget.RadioGroup
@@ -30,6 +35,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var strategyText: TextView
     private lateinit var capButton: Button
     private lateinit var providerLabel: TextView
+    private lateinit var debugToggle: CheckBox
+    private lateinit var debugPanel: View
+    private lateinit var debugText: TextView
+    private lateinit var debugPreview: ImageView
     private var captureStarted = false
 
     private val resultReceiver = object : BroadcastReceiver() {
@@ -75,6 +84,13 @@ class MainActivity : AppCompatActivity() {
                     val ms = intent.getLongExtra(CaptureService.EXTRA_LATENCY_MS, 0L)
                     latency.text = if (ms > 0) String.format("%.1f sec", ms / 1000.0) else ""
                     apiStatus.text = if (http > 0) "API: RESPONSE OK • HTTP $http" else "API: RESPONSE OK"
+                    debugText.text = intent.getStringExtra(CaptureService.EXTRA_DEBUG) ?: ""
+                    if (debugToggle.isChecked) {
+                        val previewFile = File(cacheDir, "last_sent.png")
+                        if (previewFile.exists()) {
+                            debugPreview.setImageBitmap(BitmapFactory.decodeFile(previewFile.absolutePath))
+                        }
+                    }
                     updateRequestInfo()
                 }
                 "ERROR" -> {
@@ -88,6 +104,7 @@ class MainActivity : AppCompatActivity() {
                     val ms = intent.getLongExtra(CaptureService.EXTRA_LATENCY_MS, 0L)
                     latency.text = if (ms > 0) String.format("%.1f sec", ms / 1000.0) else ""
                     apiStatus.text = if (http > 0) "API: ERROR HTTP $http" else "API: ERROR"
+                    debugText.text = "ERROR: " + (intent.getStringExtra(CaptureService.EXTRA_ERROR) ?: "Request failed")
                     updateRequestInfo()
                 }
                 "STOPPED" -> {
@@ -132,9 +149,20 @@ class MainActivity : AppCompatActivity() {
         strategyText = findViewById(R.id.strategyText)
         capButton = findViewById(R.id.capButton)
         providerLabel = findViewById(R.id.providerLabel)
+        debugToggle = findViewById(R.id.debugToggle)
+        debugPanel = findViewById(R.id.debugPanel)
+        debugText = findViewById(R.id.debugText)
+        debugPreview = findViewById(R.id.debugPreview)
 
         val prefs = getSharedPreferences("capture", MODE_PRIVATE)
         val cropGroup = findViewById<RadioGroup>(R.id.cropGroup)
+
+        debugToggle.isChecked = prefs.getBoolean("debug_mode", true)
+        debugPanel.visibility = if (debugToggle.isChecked) View.VISIBLE else View.GONE
+        debugToggle.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean("debug_mode", checked).apply()
+            debugPanel.visibility = if (checked) View.VISIBLE else View.GONE
+        }
 
         when (prefs.getString("crop_mode", "LEFT")) {
             "RIGHT" -> findViewById<RadioButton>(R.id.cropRight).isChecked = true
@@ -155,6 +183,19 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.settingsButton).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
+        findViewById<Button>(R.id.saveDebugButton).setOnClickListener {
+            try {
+                val dir = File(getExternalFilesDir(null), "debug").apply { mkdirs() }
+                val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val src = File(cacheDir, "last_sent.png")
+                if (src.exists()) src.copyTo(File(dir, "poker_$stamp.png"), overwrite = true)
+                File(dir, "poker_$stamp.txt").writeText(debugText.text.toString())
+                Toast.makeText(this, "Debug snapshot saved: " + dir.absolutePath, Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "Could not save debug snapshot", Toast.LENGTH_SHORT).show()
+            }
         }
 
         findViewById<Button>(R.id.startButton).setOnClickListener {

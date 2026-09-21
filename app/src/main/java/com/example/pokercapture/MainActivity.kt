@@ -158,10 +158,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.startButton).setOnClickListener {
-            val provider = prefs.getString("provider", "GEMINI") ?: "GEMINI"
-            val hasKey = if (provider == "OPENAI") ApiKeyStore.hasKey(this) else GeminiKeyStore.hasKey(this)
+            val hasKey = ApiKeyStore.hasKey(this)
             if (!hasKey) {
-                Toast.makeText(this, "Open Settings and save the selected provider API key first", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Open Settings and save your OpenAI API key first", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             val mgr =
@@ -204,13 +203,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateRequestInfo()
-        val provider = getSharedPreferences("capture", MODE_PRIVATE)
-            .getString("provider", "GEMINI") ?: "GEMINI"
-        providerLabel.text = if (provider == "OPENAI") {
-            "OpenAI • GPT-5.6 Sol • 1 region image"
-        } else {
-            "Gemini • Gemini 3.8 Flash • 1 region image"
-        }
+        providerLabel.text = "OpenAI • GPT-5.6 Luna • RIGHT 2/3 • top/bottom -15%"
     }
 
     override fun onStart() {

@@ -48,13 +48,21 @@ class CaptureService : Service() {
         const val EXTRA_STRATEGY = "strategy"
 
         private const val CHANNEL = "capture"
-        private const val OPENAI_MODEL = "gpt-5.6-sol"
+        private const val OPENAI_MODEL = "gpt-5.6-luna"
         private const val GEMINI_MODEL = "gemini-3.8-flash"
 
         private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament screenshot.
 
 The image is the COMPLETE selected PokerStars region exactly as captured by the app.
 Hero is the bottom-center player with the two face-up hole cards.
+
+VERY IMPORTANT — POKERSTARS 4-COLOR DECK:
+- RED cards are HEARTS (♥).
+- BLACK cards are SPADES (♠).
+- BLUE cards are DIAMONDS (♦).
+- GREEN cards are CLUBS (♣).
+Use BOTH the suit symbol and the card color to identify suits. If the symbol is small, the color mapping above is authoritative.
+Examples: red Q = Qh, black Q = Qs, blue Q = Qd, green Q = Qc.
 
 POSITION DETECTION — MUST FOLLOW THIS ORDER:
 A. Find Hero at bottom-center.
@@ -248,8 +256,7 @@ No explanation beyond that one line."""
             var imageKb = 0
             var httpCode = 0
             try {
-                val provider = getSharedPreferences("capture", MODE_PRIVATE)
-                    .getString("provider", "GEMINI") ?: "GEMINI"
+                val provider = "OPENAI"
                 val apiKey = if (provider == "OPENAI") {
                     ApiKeyStore.read(this)
                         ?: throw IllegalStateException("OpenAI API key is missing")
@@ -395,13 +402,14 @@ No explanation beyond that one line."""
             .getString("crop_mode", "LEFT") ?: "LEFT"
 
         return when (mode) {
-            "RIGHT" -> Bitmap.createBitmap(
-                bitmap,
-                bitmap.width / 2,
-                0,
-                max(1, bitmap.width - bitmap.width / 2),
-                bitmap.height
-            )
+            "RIGHT" -> {
+                val x = bitmap.width / 3
+                val y = (bitmap.height * 0.15f).roundToInt()
+                val width = max(1, bitmap.width - x)
+                val height = max(1, (bitmap.height * 0.70f).roundToInt())
+                    .coerceAtMost(bitmap.height - y)
+                Bitmap.createBitmap(bitmap, x, y, width, height)
+            }
             "TOP" -> Bitmap.createBitmap(
                 bitmap,
                 0,

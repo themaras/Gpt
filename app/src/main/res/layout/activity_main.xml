@@ -145,10 +145,11 @@
             android:layout_marginTop="5dp" />
 
         <TextView
+            android:id="@+id/providerLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center"
-            android:text="GPT-5.6 Luna • image sent only after CAP"
+            android:text="Gemini • Gemini 3.8 Flash • 1 region image"
             android:textSize="11sp"
             android:layout_marginTop="7dp" />
     </LinearLayout>

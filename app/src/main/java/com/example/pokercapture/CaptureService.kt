@@ -48,7 +48,7 @@ class CaptureService : Service() {
         const val EXTRA_STRATEGY = "strategy"
 
         private const val CHANNEL = "capture"
-        private const val MODEL = "gpt-5.6-sol"
+        private const val OPENAI_MODEL = "gpt-5.6-sol"\n        private const val GEMINI_MODEL = "gemini-3.8-flash"
 
         private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament screenshot.
 
@@ -247,8 +247,15 @@ No explanation beyond that one line."""
             var imageKb = 0
             var httpCode = 0
             try {
-                val apiKey = ApiKeyStore.read(this)
-                    ?: throw IllegalStateException("OpenAI API key is missing")
+                val provider = getSharedPreferences("capture", MODE_PRIVATE)
+                    .getString("provider", "GEMINI") ?: "GEMINI"
+                val apiKey = if (provider == "OPENAI") {
+                    ApiKeyStore.read(this)
+                        ?: throw IllegalStateException("OpenAI API key is missing")
+                } else {
+                    GeminiKeyStore.read(this)
+                        ?: throw IllegalStateException("Gemini API key is missing")
+                }
 
                 val region = cropPokerSide(frame)
                 frame.recycle()
@@ -269,33 +276,65 @@ No explanation beyond that one line."""
 
                 sendState("SENDING", imageKb = imageKb)
 
-                val imageData =
-                    "data:image/jpeg;base64," + Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+                val base64Image = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
 
-                val content = JSONArray()
-                    .put(JSONObject().put("type", "input_text").put("text", POKER_PROMPT))
-                    .put(
-                        JSONObject()
-                            .put("type", "input_image")
-                            .put("image_url", imageData)
-                            .put("detail", "high")
-                    )
-
-                val body = JSONObject().apply {
-                    put("model", MODEL)
-                    put(
-                        "input",
-                        JSONArray().put(
+                val apiResult = if (provider == "OPENAI") {
+                    val imageData = "data:image/jpeg;base64,$base64Image"
+                    val content = JSONArray()
+                        .put(JSONObject().put("type", "input_text").put("text", POKER_PROMPT))
+                        .put(
                             JSONObject()
-                                .put("role", "user")
-                                .put("content", content)
+                                .put("type", "input_image")
+                                .put("image_url", imageData)
+                                .put("detail", "high")
                         )
-                    )
-                    put("reasoning", JSONObject().put("effort", "none"))
-                    put("max_output_tokens", 120)
+
+                    val body = JSONObject().apply {
+                        put("model", OPENAI_MODEL)
+                        put(
+                            "input",
+                            JSONArray().put(
+                                JSONObject()
+                                    .put("role", "user")
+                                    .put("content", content)
+                            )
+                        )
+                        put("reasoning", JSONObject().put("effort", "none"))
+                        put("max_output_tokens", 120)
+                    }
+                    callOpenAi(apiKey, body.toString(), imageKb)
+                } else {
+                    val parts = JSONArray()
+                        .put(JSONObject().put("text", POKER_PROMPT))
+                        .put(
+                            JSONObject().put(
+                                "inline_data",
+                                JSONObject()
+                                    .put("mime_type", "image/jpeg")
+                                    .put("data", base64Image)
+                            )
+                        )
+
+                    val body = JSONObject().apply {
+                        put(
+                            "contents",
+                            JSONArray().put(
+                                JSONObject().put("parts", parts)
+                            )
+                        )
+                        put(
+                            "generationConfig",
+                            JSONObject()
+                                .put("maxOutputTokens", 120)
+                                .put(
+                                    "thinkingConfig",
+                                    JSONObject().put("thinkingLevel", "low")
+                                )
+                        )
+                    }
+                    callGemini(apiKey, body.toString(), imageKb)
                 }
 
-                val apiResult = callOpenAi(apiKey, body.toString(), imageKb)
                 httpCode = apiResult.httpCode
 
                 if (apiResult.text.isBlank()) {
@@ -454,6 +493,67 @@ No explanation beyond that one line."""
                 text = extractOutputText(root),
                 httpCode = code
             )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun callGemini(apiKey: String, json: String, imageKb: Int): ApiResult {
+        val connection = (
+            URL("https://generativelanguage.googleapis.com/v1beta/models/$GEMINI_MODEL:generateContent")
+                .openConnection() as HttpURLConnection
+        )
+
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 6000
+            connection.readTimeout = 16000
+            connection.doOutput = true
+            connection.setRequestProperty("x-goog-api-key", apiKey)
+            connection.setRequestProperty("Content-Type", "application/json")
+
+            connection.outputStream.use {
+                it.write(json.toByteArray(Charsets.UTF_8))
+                it.flush()
+            }
+
+            sendState("REQUEST_SENT", imageKb = imageKb)
+            sendState("WAITING_API", imageKb = imageKb)
+
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+            if (code !in 200..299) {
+                val message = try {
+                    JSONObject(response)
+                        .optJSONObject("error")
+                        ?.optString("message")
+                        ?.takeIf { it.isNotBlank() }
+                } catch (_: Exception) {
+                    null
+                }
+                throw ApiHttpException(code, message ?: "Gemini error HTTP $code")
+            }
+
+            val root = JSONObject(response)
+            val candidates = root.optJSONArray("candidates")
+            val text = candidates
+                ?.optJSONObject(0)
+                ?.optJSONObject("content")
+                ?.optJSONArray("parts")
+                ?.let { parts ->
+                    buildString {
+                        for (i in 0 until parts.length()) {
+                            val t = parts.optJSONObject(i)?.optString("text").orEmpty()
+                            if (t.isNotBlank()) append(t)
+                        }
+                    }
+                }
+                .orEmpty()
+                .trim()
+
+            return ApiResult(text = text, httpCode = code)
         } finally {
             connection.disconnect()
         }

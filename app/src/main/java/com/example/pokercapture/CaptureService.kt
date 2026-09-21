@@ -61,51 +61,70 @@ class CaptureService : Service() {
         private const val CHANNEL = "capture"
         private const val OPENAI_MODEL = "gpt-5.6-luna"
         private const val GEMINI_MODEL = "gemini-3.8-flash"
-        private const val PROMPT_VERSION = "debug_v2_real_display_png"
+        private const val PROMPT_VERSION = "debug_v3_perception_lock"
 
         private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament screenshot.
 
 The image is the COMPLETE selected PokerStars region exactly as captured by the app.
 Hero is the bottom-center player with the two face-up hole cards.
 
-VERY IMPORTANT — POKERSTARS 4-COLOR DECK:
-- RED cards are HEARTS (♥).
-- BLACK cards are SPADES (♠).
-- BLUE cards are DIAMONDS (♦).
-- GREEN cards are CLUBS (♣).
-Use BOTH the suit symbol and the card color to identify suits. If the symbol is small, the color mapping above is authoritative.
-Examples: red Q = Qh, black Q = Qs, blue Q = Qd, green Q = Qc.
+DO THIS IN TWO INTERNAL PASSES. DO NOT SKIP PASS 1.
 
-POSITION DETECTION — MUST FOLLOW THIS ORDER:
-A. Find Hero at bottom-center.
-B. Find the actual dealer/button marker: the small red/white circular marker with a spade symbol next to one player.
-C. Count only seats actually dealt into the current hand.
-D. Starting from the dealer button and moving clockwise, assign positions from the active seats.
+PASS 1 — READ THE SCREEN ONLY:
+1. Read Hero's two hole cards.
+2. Read the board. Count the visible community cards exactly:
+   - 0 cards = PREFLOP
+   - 3 = FLOP
+   - 4 = TURN
+   - 5 = RIVER
+   Never invent missing community cards.
+3. Find the real PokerStars dealer/button marker: the small red/white circular marker with a spade symbol next to a player.
+4. Determine which seats are ACTUALLY dealt into the current hand. Card backs/face-up cards are evidence of participation.
+5. Read the visible current action facing Hero, including CHECK/FOLD/CALL/BET/RAISE and amount when clearly visible.
+6. Read Hero stack and blinds only if legible.
+
+POKERSTARS 4-COLOR DECK — HARD RULE:
+- RED = HEARTS = h = ♥
+- BLACK = SPADES = s = ♠
+- BLUE = DIAMONDS = d = ♦
+- GREEN = CLUBS = c = ♣
+Use the card COLOR as a hard cross-check on the suit symbol.
+A blue card MUST be diamond. A green card MUST be club. A red card MUST be heart. A black card MUST be spade.
+Never output a suit that conflicts with the visible card color.
+
+POSITION:
+Only assign Hero position after identifying the real dealer marker AND the seats actually dealt into THIS hand.
 For 6-handed: BTN, SB, BB, UTG, HJ, CO.
 For 5-handed: BTN, SB, BB, UTG, CO.
 For 4-handed: BTN, SB, BB, CO.
 For 3-handed: BTN, SB, BB.
 Heads-up: BTN/SB, BB.
-NEVER infer Hero position from screen location alone.
-Do not confuse avatars, bounty icons, blind chips, country flags or action chips with the dealer button.
-If dealer/button is not reliable, POSITION=? rather than guessing.
+NEVER infer Hero position from Hero's screen location alone.
+Do not confuse avatars, bounty icons, blind chips, country flags, seat badges or action chips with the dealer button.
 
-STRATEGY:
-Use effective stack, position, prior action, pot odds, board texture and visible opponent action.
+SPECIAL JOIN/WAITING RULE:
+Hero may have just joined the table, posted out of turn, be waiting for the big blind, be sitting out, or not yet be part of the normal rotation.
+If Hero is not clearly dealt into the current hand, or the table state makes normal positional rotation uncertain, POSITION=?.
+Do NOT force BB/SB merely because Hero posted chips or is seated near a blind location.
+If the dealer marker is not reliable, POSITION=?.
+
+PASS 2 — DECIDE:
+Only after PASS 1 is internally consistent, choose the poker action.
+Use effective stack, verified position, verified current action, pot odds, board texture and visible opponent action.
+If a key fact is unreadable, use ? rather than inventing it.
 Do not default to CALL or BET. Consider FOLD, CHECK and RAISE normally.
-For strong value hands, use appropriate value aggression.
-For weak hands facing meaningful action, fold when calling is not justified.
-Never invent unreadable values.
 
-Return exactly ONE line:
-ACTION|SIZE|POSITION|HAND|STACK|BOARD|STRATEGY|CONFIDENCE
+Return exactly ONE line with 10 fields:
+ACTION|SIZE|POSITION|HAND|STACK|BOARD|BUTTON|VISIBLE_ACTION|STRATEGY|CONFIDENCE
 
 ACTION: FOLD,CHECK,CALL,BET,RAISE,ALL-IN,UNCLEAR.
 SIZE: chip amount for CALL/BET/RAISE when applicable, otherwise -.
 POSITION: BTN,SB,BB,UTG,HJ,CO or ?.
-HAND: compact cards, e.g. Td9h.
+HAND: exactly two compact cards, e.g. Td9h, or ?.
 STACK: effective stack in BB if reliable, otherwise ?.
-BOARD: compact board, e.g. Ac4h2d or PREFLOP.
+BOARD: compact board with exactly 0,3,4,or5 cards; use PREFLOP for 0, or ? if unreadable.
+BUTTON: username/seat label nearest the real dealer marker, or ?.
+VISIBLE_ACTION: concise verified action facing Hero, e.g. CHECK, CALL 200, BET 800, RAISE 1600, NONE, or ?.
 STRATEGY: maximum 6 words.
 CONFIDENCE: HIGH,MEDIUM,LOW.
 No explanation beyond that one line."""
@@ -362,7 +381,7 @@ No explanation beyond that one line."""
                         )
                     )
                     put("reasoning", JSONObject().put("effort", "none"))
-                    put("max_output_tokens", 120)
+                    put("max_output_tokens", 180)
                 }
 
                 val apiStarted = System.currentTimeMillis()
@@ -417,7 +436,9 @@ No explanation beyond that one line."""
                     appendLine("Request ID: ${apiResult.requestId.ifBlank { "—" }}")
                     appendLine("Timing: encode=${encodeMs}ms api=${apiMs}ms total=${totalMs}ms")
                     appendLine("RAW: ${apiResult.text}")
-                    append("PARSED: action=${parsed.action}; size=${parsed.size}; pos=${parsed.position}; hand=${parsed.hand}; stack=${parsed.stack}; board=${parsed.board}; strategy=${parsed.strategy}; confidence=${parsed.confidence}")
+                    appendLine("BUTTON: ${parsed.button}")
+                    appendLine("VISIBLE ACTION: ${parsed.visibleAction}")
+                    append("PARSED: action=${parsed.action}; size=${parsed.size}; pos=${parsed.position}; hand=${parsed.hand}; stack=${parsed.stack}; board=${parsed.board}; button=${parsed.button}; visible=${parsed.visibleAction}; strategy=${parsed.strategy}; confidence=${parsed.confidence}")
                 }
 
                 sendBroadcast(
@@ -681,6 +702,8 @@ No explanation beyond that one line."""
         val hand: String,
         val stack: String,
         val board: String,
+        val button: String,
+        val visibleAction: String,
         val strategy: String,
         val confidence: String
     )
@@ -693,20 +716,39 @@ No explanation beyond that one line."""
             .orEmpty()
 
         val p = line.split("|").map { it.trim() }
-        if (p.size < 8) return PokerResult("UNCLEAR", "-", "?", "?", "?", "?", "Need clearer read", "LOW")
+        if (p.size < 10) {
+            return PokerResult("UNCLEAR", "-", "?", "?", "?", "?", "?", "?", "Need clearer read", "LOW")
+        }
 
         val allowed = setOf("FOLD", "CHECK", "CALL", "BET", "RAISE", "ALL-IN", "UNCLEAR")
         val action = p[0].uppercase().let { if (it in allowed) it else "UNCLEAR" }
+
+        // Basic structural sanity checks: two hole cards; board can only be preflop/3/4/5 cards.
+        val cardRegex = Regex("([2-9TJQKA])([cdhs])", RegexOption.IGNORE_CASE)
+        val handRaw = p[3].replace("10", "T").replace(" ", "")
+        val handCount = cardRegex.findAll(handRaw).count()
+        val hand = if (p[3] == "?" || handCount == 2) p[3] else "?"
+
+        val boardRaw = p[5].replace("10", "T").replace(" ", "")
+        val boardCount = cardRegex.findAll(boardRaw).count()
+        val board = when {
+            p[5].equals("PREFLOP", true) -> "PREFLOP"
+            p[5] == "?" -> "?"
+            boardCount in setOf(3, 4, 5) -> p[5]
+            else -> "?"
+        }
 
         return PokerResult(
             action = action,
             size = p[1],
             position = p[2],
-            hand = p[3],
+            hand = hand,
             stack = p[4],
-            board = p[5],
-            strategy = p[6],
-            confidence = p[7].uppercase()
+            board = board,
+            button = p[6],
+            visibleAction = p[7],
+            strategy = p[8],
+            confidence = p[9].uppercase()
         )
     }
 

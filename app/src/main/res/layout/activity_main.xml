@@ -1,36 +1,206 @@
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="vertical" android:gravity="center" android:padding="28dp">
-    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-        android:text="Poker Capture" android:textSize="28sp" android:textStyle="bold" />
-    <TextView android:id="@+id/status" android:layout_width="wrap_content" android:layout_height="wrap_content"
-        android:text="Stopped" android:textSize="18sp" android:layout_marginTop="18dp" />
-    <TextView android:id="@+id/frames" android:layout_width="wrap_content" android:layout_height="wrap_content"
-        android:text="Frames saved: 0" android:textSize="18sp" android:layout_marginTop="10dp" />
-    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-        android:text="AI model" android:textSize="16sp" android:layout_marginTop="18dp" />
-    <RadioGroup android:id="@+id/aiGroup" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="horizontal" android:gravity="center">
-        <RadioButton android:id="@+id/aiChatGpt" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ChatGPT" />
-        <RadioButton android:id="@+id/aiGemini" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Gemini" />
-        <RadioButton android:id="@+id/aiClaude" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Claude" />
-    </RadioGroup>
-    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-        android:text="Screenshot half" android:textSize="16sp" android:layout_marginTop="18dp" />
-    <RadioGroup android:id="@+id/cropGroup" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="horizontal" android:gravity="center">
-        <RadioButton android:id="@+id/cropLeft" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Left" />
-        <RadioButton android:id="@+id/cropRight" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Right" />
-        <RadioButton android:id="@+id/cropTop" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Top" />
-        <RadioButton android:id="@+id/cropBottom" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Bottom" />
-    </RadioGroup>
-    <Button android:id="@+id/accessibilityButton" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="ENABLE AUTO-SEND / SAME CHAT" android:layout_marginTop="18dp" />
-    <Button android:id="@+id/startButton" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="START CAPTURE" android:layout_marginTop="28dp" />
-    <Button android:id="@+id/stopButton" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="STOP" android:layout_marginTop="12dp" />
-    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="Prototype: captures the screen and saves a frame when the table region changes. For hand review/study after play."
-        android:layout_marginTop="24dp" />
-</LinearLayout>
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="POKER CAPTURE"
+            android:textSize="21sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="STOPPED"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginTop="4dp" />
+
+        <TextView
+            android:id="@+id/apiStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="API: idle"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/resultAction"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="READY"
+            android:textStyle="bold"
+            android:textSize="44sp"
+            android:minHeight="72dp"
+            android:layout_marginTop="10dp" />
+
+        <TextView
+            android:id="@+id/resultMeta"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="—"
+            android:textSize="17sp"
+            android:maxLines="2" />
+
+        <TextView
+            android:id="@+id/boardText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text=""
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:layout_marginTop="4dp" />
+
+        <TextView
+            android:id="@+id/strategyText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text=""
+            android:textSize="16sp"
+            android:maxLines="2"
+            android:layout_marginTop="2dp" />
+
+        <TextView
+            android:id="@+id/latency"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text=""
+            android:textSize="13sp"
+            android:layout_marginTop="3dp" />
+
+        <TextView
+            android:id="@+id/requestInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="Requests: 0 • Last: —"
+            android:textSize="12sp"
+            android:layout_marginTop="3dp" />
+
+        <Button
+            android:id="@+id/capButton"
+            android:layout_width="match_parent"
+            android:layout_height="170dp"
+            android:text="CAP"
+            android:textSize="44sp"
+            android:textStyle="bold"
+            android:layout_marginTop="12dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="PokerStars side"
+            android:textSize="13sp"
+            android:layout_marginTop="10dp" />
+
+        <RadioGroup
+            android:id="@+id/cropGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center">
+            <RadioButton android:id="@+id/cropLeft" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Left" />
+            <RadioButton android:id="@+id/cropRight" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Right 2/3" />
+            <RadioButton android:id="@+id/cropTop" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Top" />
+            <RadioButton android:id="@+id/cropBottom" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Bottom" />
+        </RadioGroup>
+
+        <CheckBox
+            android:id="@+id/debugToggle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="DEBUG"
+            android:checked="true"
+            android:layout_marginTop="8dp" />
+
+        <LinearLayout
+            android:id="@+id/debugPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="visible">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="EXACT IMAGE SENT TO API"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:textSize="12sp"
+                android:layout_marginTop="6dp" />
+
+            <ImageView
+                android:id="@+id/debugPreview"
+                android:layout_width="match_parent"
+                android:layout_height="180dp"
+                android:scaleType="fitCenter"
+                android:adjustViewBounds="true"
+                android:contentDescription="Exact image sent to API"
+                android:background="#111111" />
+
+            <TextView
+                android:id="@+id/debugText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Debug data will appear here after CAP."
+                android:textSize="11sp"
+                android:typeface="monospace"
+                android:textIsSelectable="true"
+                android:padding="6dp" />
+
+            <Button
+                android:id="@+id/saveDebugButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="SAVE DEBUG SNAPSHOT" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/startButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="START SCREEN CAPTURE"
+            android:layout_marginTop="8dp" />
+
+        <Button
+            android:id="@+id/stopButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="STOP"
+            android:layout_marginTop="5dp" />
+
+        <Button
+            android:id="@+id/settingsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="SETTINGS / API KEY"
+            android:layout_marginTop="5dp" />
+
+        <TextView
+            android:id="@+id/providerLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="OpenAI • GPT-5.6 Luna • RIGHT 2/3 • top/bottom -15%"
+            android:textSize="11sp"
+            android:layout_marginTop="7dp" />
+    </LinearLayout>
+</ScrollView>

@@ -1,7 +1,18 @@
 # Poker Capture Android
 
-Android prototype for screen capture and automatic frame saving when the table region changes.
+Split-screen Android client for capturing a selected half of the screen and sending that cropped frame directly to the OpenAI Responses API.
 
-GitHub Actions builds a debug APK automatically after pushes to main. Open Actions > Build Android APK > latest run > Artifacts to download PokerCapture-debug-apk.
+## Flow
 
-This prototype captures/detects visual changes and stores frames for later hand review. It does not provide live betting recommendations.
+1. Open PokerStars and Poker Capture in Android split screen.
+2. In Poker Capture choose which half contains the poker table: Left / Right / Top / Bottom.
+3. Paste the OpenAI API key once and tap **Save API Key**. The key is encrypted at rest with Android Keystore and is never committed to GitHub.
+4. Tap **Start Screen Capture** and choose **Entire screen** in Android's capture dialog.
+5. During play, tap the large **CAP** button.
+6. Poker Capture crops only the selected half, compresses the image in memory, calls the OpenAI Responses API, and displays the short result plus detected hand/position/stack/confidence and latency.
+
+The screenshot is not saved to the photo gallery. A request is sent only when CAP is pressed.
+
+Current model: `gpt-5.6-luna`.
+
+GitHub Actions builds a debug APK automatically after pushes to `main`. Open **Actions → Build Android APK → latest run → Artifacts** and download `PokerCapture-debug-apk`.

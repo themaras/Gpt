@@ -1,395 +1,863 @@
 package com.example.pokercapture
 
-import android.app.*
+import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
 import android.content.Intent
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.database.ContentObserver
-import android.net.Uri
-import android.provider.MediaStore
-import android.content.ContentUris
-import android.content.ContentValues
 import android.graphics.Bitmap
-import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
-import android.view.Gravity
-import android.view.WindowManager
-import android.widget.Button
-import android.widget.Toast
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.os.IBinder
-import android.os.Environment
+import android.os.Build
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
+import android.util.Base64
+import android.util.DisplayMetrics
 import androidx.core.app.NotificationCompat
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileOutputStream
-import kotlin.math.abs
+import java.security.MessageDigest
+import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
+import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 class CaptureService : Service() {
     companion object {
         const val ACTION_START = "capture.start"
         const val ACTION_STOP = "capture.stop"
+        const val ACTION_ANALYZE = "capture.analyze"
+        const val ACTION_ANALYSIS_UPDATE = "capture.analysis.update"
+
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_DATA = "data"
-        const val CHANNEL = "capture"
+        const val EXTRA_STATE = "state"
+        const val EXTRA_ACTION_TEXT = "actionText"
+        const val EXTRA_META = "meta"
+        const val EXTRA_ERROR = "error"
+        const val EXTRA_LATENCY_MS = "latencyMs"
+        const val EXTRA_IMAGE_KB = "imageKb"
+        const val EXTRA_HTTP_CODE = "httpCode"
+        const val EXTRA_BOARD = "board"
+        const val EXTRA_STRATEGY = "strategy"
+        const val EXTRA_DEBUG = "debug"
+        const val EXTRA_RAW = "raw"
+        const val EXTRA_REQUEST_ID = "requestId"
+        const val EXTRA_IMAGE_SHA = "imageSha"
+        const val EXTRA_FRAME_AGE_MS = "frameAgeMs"
+        const val EXTRA_FRESH_FRAME = "freshFrame"
+        const val EXTRA_CROP_INFO = "cropInfo"
+        const val EXTRA_TIMING = "timing"
+
+        private const val CHANNEL = "capture"
+        private const val OPENAI_MODEL = "gpt-5.6-luna"
+        private const val GEMINI_MODEL = "gemini-3.8-flash"
+        private const val PROMPT_VERSION = "debug_v4_button_anchor"
+
+        private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament screenshot.
+
+The image is the COMPLETE selected PokerStars region exactly as captured by the app.
+Hero is the bottom-center player with the two face-up hole cards.
+
+DO THIS IN TWO INTERNAL PASSES. DO NOT SKIP PASS 1.
+
+PASS 1 — READ THE SCREEN ONLY:
+1. Read Hero's two hole cards.
+2. Read the board. Count the visible community cards exactly:
+   - 0 cards = PREFLOP
+   - 3 = FLOP
+   - 4 = TURN
+   - 5 = RIVER
+   Never invent missing community cards.
+3. Find the real PokerStars dealer/button marker: the small red/white circular marker with a spade symbol.
+   IMPORTANT: first locate the marker itself by its red/white circular spade appearance, THEN assign it to the NEAREST player name/seat.
+   Do not assign BUTTON based on table order, stack chips, avatars, card backs, or where you expect the button to be.
+   If two seats are similarly close or the marker is ambiguous, BUTTON=?.
+4. Determine which seats are ACTUALLY dealt into the current hand. Card backs/face-up cards are evidence of participation.
+5. Read the current action facing Hero ONLY from explicit action labels/chips/text that are visible on the table.
+   Examples of valid VISIBLE_ACTION: CHECK, CALL 400, BET 600, RAISE 1600, NONE.
+   "BETTING OPTIONS", "buttons visible", "action available", or UI control labels are NOT opponent actions and must never be returned.
+6. Read Hero stack and blinds only if legible.
+
+POKERSTARS 4-COLOR DECK — HARD RULE:
+- RED = HEARTS = h = ♥
+- BLACK = SPADES = s = ♠
+- BLUE = DIAMONDS = d = ♦
+- GREEN = CLUBS = c = ♣
+Use the card COLOR as a hard cross-check on the suit symbol.
+A blue card MUST be diamond. A green card MUST be club. A red card MUST be heart. A black card MUST be spade.
+Never output a suit that conflicts with the visible card color.
+
+POSITION:
+Only assign Hero position after identifying the real dealer marker AND the seats actually dealt into THIS hand.
+For 6-handed: BTN, SB, BB, UTG, HJ, CO.
+For 5-handed: BTN, SB, BB, UTG, CO.
+For 4-handed: BTN, SB, BB, CO.
+For 3-handed: BTN, SB, BB.
+Heads-up: BTN/SB, BB.
+NEVER infer Hero position from Hero's screen location alone.
+Do not confuse avatars, bounty icons, blind chips, country flags, seat badges or action chips with the dealer button.
+
+SPECIAL JOIN/WAITING RULE:
+Hero may have just joined the table, posted out of turn, be waiting for the big blind, be sitting out, or not yet be part of the normal rotation.
+If Hero is not clearly dealt into the current hand, or the table state makes normal positional rotation uncertain, POSITION=?.
+Do NOT force BB/SB merely because Hero posted chips or is seated near a blind location.
+If BUTTON=? then POSITION=?.
+If BUTTON is identified but dealt-in seats are not clear enough to count reliably, POSITION=?.
+
+POSITION DERIVATION CHECK:
+Before outputting POSITION, verify that BUTTON points to the seat physically nearest the red/white spade marker.
+Then walk clockwise through ONLY the dealt-in seats.
+If this geometric walk conflicts with the guessed position, output POSITION=? rather than guessing.
+
+PASS 2 — DECIDE:
+Only after PASS 1 is internally consistent, choose the poker action.
+Use effective stack, verified position, verified current action, pot odds, board texture and visible opponent action.
+If a key fact is unreadable, use ? rather than inventing it.
+Do not default to CALL or BET. Consider FOLD, CHECK and RAISE normally.
+
+Return exactly ONE line with 10 fields:
+ACTION|SIZE|POSITION|HAND|STACK|BOARD|BUTTON|VISIBLE_ACTION|STRATEGY|CONFIDENCE
+
+ACTION: FOLD,CHECK,CALL,BET,RAISE,ALL-IN,UNCLEAR.
+SIZE: chip amount for CALL/BET/RAISE when applicable, otherwise -.
+POSITION: BTN,SB,BB,UTG,HJ,CO or ?.
+HAND: exactly two compact cards, e.g. Td9h, or ?.
+STACK: effective stack in BB if reliable, otherwise ?.
+BOARD: compact board with exactly 0,3,4,or5 cards; use PREFLOP for 0, or ? if unreadable.
+BUTTON: username/seat label nearest the real red/white spade dealer marker, or ?.
+VISIBLE_ACTION: concise verified opponent/current action facing Hero, e.g. CHECK, CALL 200, BET 800, RAISE 1600, NONE, or ?. Never output UI labels such as BETTING OPTIONS.
+STRATEGY: maximum 6 words.
+CONFIDENCE: HIGH,MEDIUM,LOW.
+No explanation beyond that one line."""
     }
+
     private var projection: MediaProjection? = null
-    private var reader: ImageReader? = null
-    private var lastSignature: Long? = null
-    private var lastSavedAt = 0L
-    private var tableWasPresent = false
-    private var heroActionWasVisible = false
-    private var screenshotObserver: ContentObserver? = null
-    private var lastScreenshotId = -1L
     private var projectionCallback: MediaProjection.Callback? = null
-    private var overlayButton: Button? = null
-    private var windowManager: WindowManager? = null
+    private var reader: ImageReader? = null
+    private var virtualDisplay: VirtualDisplay? = null
     private val latestFrameLock = Any()
     private var latestFrame: Bitmap? = null
-
-    private fun selectedAiPackage(): String {
-        return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
-            "GEMINI" -> "com.google.android.apps.bard"
-            "CLAUDE" -> "com.anthropic.claude"
-            else -> "com.openai.chatgpt"
-        }
-    }
-
-    private fun selectedClipboardPackages(): List<String> {
-        return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
-            "GEMINI" -> listOf("com.google.android.apps.bard", "com.android.chrome")
-            "CLAUDE" -> listOf("com.anthropic.claude", "com.android.chrome")
-            else -> listOf("com.openai.chatgpt", "com.android.chrome")
-        }
-    }
-
-    private fun selectedAiLabel(): String {
-        return when (getSharedPreferences("capture", MODE_PRIVATE).getString("ai_model", "CHATGPT")) {
-            "GEMINI" -> "Gemini"
-            "CLAUDE" -> "Claude"
-            else -> "ChatGPT"
-        }
-    }
+    private var latestFrameAtMs: Long = 0L
+    private var captureSurfaceWidth: Int = 0
+    private var captureSurfaceHeight: Int = 0
+    private var appWindowWidth: Int = 0
+    private var appWindowHeight: Int = 0
+    private val analyzing = AtomicBoolean(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
+
     override fun onCreate() {
         super.onCreate()
-        startScreenshotWatcher()
-        getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, "Screen capture", NotificationManager.IMPORTANCE_LOW))
+        val nm = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL,
+                    "Screen capture",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            )
+        }
     }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) { stopCapture(); stopSelf(); return START_NOT_STICKY }
-        if (intent?.action == ACTION_START) {
-            startForeground(1, NotificationCompat.Builder(this, CHANNEL)
-                .setContentTitle("Poker Capture").setContentText("Screen capture active")
-                .setSmallIcon(android.R.drawable.ic_menu_camera).build())
-            startCapture(intent)
-            showOverlayButton()
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopCapture()
+                sendState("STOPPED")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_START -> {
+                startForeground(
+                    1,
+                    NotificationCompat.Builder(this, CHANNEL)
+                        .setContentTitle("Poker Capture")
+                        .setContentText("Split-screen capture ready")
+                        .setSmallIcon(android.R.drawable.ic_menu_camera)
+                        .build()
+                )
+                startCapture(intent)
+            }
+            ACTION_ANALYZE -> analyzeLatestFrame()
         }
         return START_NOT_STICKY
     }
+
     @Suppress("DEPRECATION")
     private fun startCapture(intent: Intent) {
+        stopCapture()
+
         val code = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
-        val data: Intent = if (android.os.Build.VERSION.SDK_INT >= 33)
-            intent.getParcelableExtra(EXTRA_DATA, Intent::class.java)!! else intent.getParcelableExtra(EXTRA_DATA)!!
-        val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        projection = mgr.getMediaProjection(code, data)
-        projectionCallback = object : MediaProjection.Callback() {
-            override fun onStop() {
-                reader?.close()
-                reader = null
-                projection = null
-                stopSelf()
-            }
-        }
-        projection!!.registerCallback(projectionCallback!!, Handler(Looper.getMainLooper()))
-        val dm = resources.displayMetrics
-        val width = dm.widthPixels
-        val height = dm.heightPixels
-        reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-        projection!!.createVirtualDisplay("PokerCapture", width, height, dm.densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader!!.surface, null, null)
-        reader!!.setOnImageAvailableListener({ r -> processFrame(r) }, null)
-    }
-    private fun processFrame(r: ImageReader) {
-        val image = r.acquireLatestImage() ?: return
-        try {
-            val plane = image.planes[0]
-            val buffer = plane.buffer
-            val pixelStride = plane.pixelStride
-            val rowStride = plane.rowStride
-            val rowPadding = rowStride - pixelStride * image.width
-            val bmp = Bitmap.createBitmap(image.width + rowPadding / pixelStride, image.height, Bitmap.Config.ARGB_8888)
-            bmp.copyPixelsFromBuffer(buffer)
-            val clean = Bitmap.createBitmap(bmp, 0, 0, image.width, image.height)
-            bmp.recycle()
-            // Keep one completed frame ready for the CAP button. The ImageReader listener is
-            // the only consumer; CAP must not race it by acquiring images independently.
-            synchronized(latestFrameLock) {
-                latestFrame?.recycle()
-                latestFrame = clean.copy(Bitmap.Config.ARGB_8888, false)
-            }
-            val x0 = (clean.width * 0.08).toInt(); val x1 = (clean.width * 0.92).toInt()
-            val y0 = (clean.height * 0.18).toInt(); val y1 = (clean.height * 0.72).toInt()
-            var sig = 0L; var samples = 0; var y = y0
-            while (y < y1) {
-                var x = x0
-                while (x < x1) { sig += clean.getPixel(x, y).toLong() and 0x00FFFFFF; samples++; x += 48 }
-                y += 48
-            }
-            sig /= samples.coerceAtLeast(1)
-            val now = System.currentTimeMillis()
-            // Guard: only save when the PokerStars table is likely visible.
-            // Detect the stable green felt in the central table area; navigating to other apps should fail this test.
-            var green = 0
-            var total = 0
-            var gy = (clean.height * 0.28).toInt()
-            val gy1 = (clean.height * 0.68).toInt()
-            while (gy < gy1) {
-                var gx = (clean.width * 0.12).toInt()
-                val gx1 = (clean.width * 0.88).toInt()
-                while (gx < gx1) {
-                    val p = clean.getPixel(gx, gy)
-                    val rr = (p shr 16) and 255
-                    val gg = (p shr 8) and 255
-                    val bb = p and 255
-                    if (gg > rr * 1.18 && gg > bb * 1.12 && gg > 45) green++
-                    total++
-                    gx += 32
-                }
-                gy += 32
-            }
-            val tablePresent = total > 0 && green.toDouble() / total > 0.18
-
-            // Hero-turn trigger calibrated from the supplied 832x1852 screenshots.
-            // Only inspect the large bottom decision buttons (Fold / Check / Call / Bet / Raise).
-            var buttonPixels = 0
-            var buttonTotal = 0
-            var ay = (clean.height * 0.875).toInt()
-            val ay1 = (clean.height * 0.935).toInt()
-            while (ay < ay1) {
-                var ax = (clean.width * 0.03).toInt()
-                val ax1 = (clean.width * 0.97).toInt()
-                while (ax < ax1) {
-                    val p = clean.getPixel(ax, ay)
-                    val rr = (p shr 16) and 255
-                    val gg = (p shr 8) and 255
-                    val bb = p and 255
-                    // Poker action buttons are strongly saturated blue/green/orange/red or dark-gray Fold.
-                    val saturated = maxOf(rr, gg, bb) - minOf(rr, gg, bb) > 55 && maxOf(rr, gg, bb) > 105
-                    val foldGray = rr in 45..115 && gg in 45..115 && bb in 45..125 && kotlin.math.abs(rr - gg) < 25
-                    if (saturated || foldGray) buttonPixels++
-                    buttonTotal++
-                    ax += 12
-                }
-                ay += 12
-            }
-            val heroActionVisible = tablePresent && buttonTotal > 0 &&
-                buttonPixels.toDouble() / buttonTotal > 0.20
-
-            if (heroActionVisible && !heroActionWasVisible && now - lastSavedAt > 900) {
-                saveFrame(clean, now)
-                lastSavedAt = now
-                sendBroadcast(Intent("com.example.pokercapture.FRAME_SAVED").setPackage(packageName))
-            }
-            heroActionWasVisible = heroActionVisible
-            tableWasPresent = tablePresent
-            if (tablePresent) lastSignature = sig
-            clean.recycle()
-        } finally { image.close() }
-    }
-    private fun saveFrame(bitmap: Bitmap, ts: Long) {
-        // Crop according to the user's tablet/split-screen orientation preference.
-        val cropMode = getSharedPreferences("capture", MODE_PRIVATE).getString("crop_mode", "RIGHT") ?: "RIGHT"
-        val half = when (cropMode) {
-            "LEFT" -> Bitmap.createBitmap(bitmap, 0, 0, (bitmap.width / 2).coerceAtLeast(1), bitmap.height)
-            "TOP" -> Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, (bitmap.height / 2).coerceAtLeast(1))
-            "BOTTOM" -> Bitmap.createBitmap(bitmap, 0, bitmap.height / 2, bitmap.width, (bitmap.height - bitmap.height / 2).coerceAtLeast(1))
-            else -> Bitmap.createBitmap(bitmap, bitmap.width / 2, 0, (bitmap.width - bitmap.width / 2).coerceAtLeast(1), bitmap.height)
-        }
-        val targetWidth = (half.width * 0.70f).toInt().coerceAtLeast(1)
-        val targetHeight = (half.height * 0.70f).toInt().coerceAtLeast(1)
-        val output = Bitmap.createScaledBitmap(half, targetWidth, targetHeight, true)
-        half.recycle()
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "PokerCapture_$ts.jpg")
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/PokerCapture")
-            put(MediaStore.Images.Media.IS_PENDING, 1)
-        }
-        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return
-        try {
-            contentResolver.openOutputStream(uri)?.use {
-                output.compress(Bitmap.CompressFormat.JPEG, 60, it)
-            } ?: throw IllegalStateException("Could not open MediaStore output stream")
-            values.clear()
-            values.put(MediaStore.Images.Media.IS_PENDING, 0)
-            contentResolver.update(uri, values, null, null)
-            val prefs = getSharedPreferences("capture", MODE_PRIVATE)
-            prefs.edit().putInt("frames_saved", prefs.getInt("frames_saved", 0) + 1).apply()
-        } catch (e: Exception) {
-            contentResolver.delete(uri, null, null)
-        } finally {
-            if (output !== bitmap) output.recycle()
-        }
-    }
-
-    private fun showOverlayButton() {
-        if (overlayButton != null) return
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val button = Button(this).apply {
-            text = "CAP"
-            setTextColor(Color.WHITE)
-            textSize = 15f
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.argb(210, 30, 30, 30)) }
-            setOnClickListener { captureWhenFrameReady() }
-        }
-        val size = (80 * resources.displayMetrics.density).toInt()
-        val params = WindowManager.LayoutParams(size, size, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply {
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            x = (8 * resources.displayMetrics.density).toInt()
-        }
-        windowManager?.addView(button, params)
-        overlayButton = button
-    }
-
-    private fun captureWhenFrameReady(attempt: Int = 0) {
-        val frame = synchronized(latestFrameLock) {
-            latestFrame?.copy(Bitmap.Config.ARGB_8888, false)
-        }
-        if (frame == null) {
-            if (attempt < 15) Handler(Looper.getMainLooper()).postDelayed({ captureWhenFrameReady(attempt + 1) }, 50)
-            return
-        }
-        captureAndNotify(frame)
-    }
-
-    private fun captureAndNotify(clean: Bitmap) {
-        try {
-            val ts = System.currentTimeMillis()
-            saveFrame(clean, ts)
-            val uri = contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                arrayOf(MediaStore.Images.Media._ID),
-                MediaStore.Images.Media.DISPLAY_NAME + "=?",
-                arrayOf("PokerCapture_$ts.jpg"),
-                null
-            )?.use { cur ->
-                if (cur.moveToFirst()) {
-                    ContentUris.withAppendedId(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                        cur.getLong(0)
-                    )
-                } else null
-            } ?: return
-
-            // The user keeps the desired ChatGPT conversation already open and active.
-            // Put the freshly saved image on the Android clipboard and let Accessibility
-            // paste it into that exact composer. No ACTION_SEND, no new-chat launch.
-            try {
-                // Grant the image URI to both the native AI app and Chrome. The user
-                // may keep Gemini/Claude/ChatGPT open as a web app in split screen.
-                for (pkg in selectedClipboardPackages()) {
-                    try {
-                        grantUriPermission(
-                            pkg,
-                            uri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        )
-                    } catch (_: Exception) {
-                        // The package may not be installed; another target can still use the clip.
-                    }
-                }
-                val clipboard = getSystemService(ClipboardManager::class.java)
-                clipboard.setPrimaryClip(ClipData.newUri(contentResolver, "PokerCapture", uri))
-            } catch (e: Exception) {
-                Handler(Looper.getMainLooper()).post {
-                    Toast.makeText(this, "CAP: αποτυχία αντιγραφής εικόνας", Toast.LENGTH_SHORT).show()
-                }
+        val data: Intent = if (Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra(EXTRA_DATA, Intent::class.java) ?: run {
+                sendError("Android did not return screen-capture data", System.currentTimeMillis())
                 return
             }
+        } else {
+            intent.getParcelableExtra(EXTRA_DATA) ?: run {
+                sendError("Android did not return screen-capture data", System.currentTimeMillis())
+                return
+            }
+        }
 
-            if (!ChatGptAccessibilityService.pasteAndSend()) {
-                Handler(Looper.getMainLooper()).post {
-                    Toast.makeText(
-                        this,
-                        "CAP: ενεργοποίησε το Poker Capture Accessibility για " + selectedAiLabel(),
-                        Toast.LENGTH_SHORT
-                    ).show()
+        try {
+            val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            projection = mgr.getMediaProjection(code, data)
+
+            projectionCallback = object : MediaProjection.Callback() {
+                override fun onStop() {
+                    reader?.close()
+                    reader = null
+                    virtualDisplay?.release()
+                    virtualDisplay = null
+                    projection = null
+                    synchronized(latestFrameLock) {
+                        latestFrame?.recycle()
+                        latestFrame = null
+                    }
+                    sendState("STOPPED")
                 }
             }
-        } finally {
-            clean.recycle()
+            projection!!.registerCallback(projectionCallback!!, Handler(Looper.getMainLooper()))
+
+            // IMPORTANT: resources.displayMetrics is the CURRENT split-screen app pane
+            // (e.g. 435x800), not the physical display. Using it here downscaled the whole
+            // 1340x800 screen to 435px wide before vision ever saw it.
+            val windowDm = resources.displayMetrics
+            appWindowWidth = windowDm.widthPixels
+            appWindowHeight = windowDm.heightPixels
+
+            val realDm = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            val display = (getSystemService(DISPLAY_SERVICE) as DisplayManager)
+                .getDisplay(android.view.Display.DEFAULT_DISPLAY)
+            @Suppress("DEPRECATION")
+            display.getRealMetrics(realDm)
+
+            val width = realDm.widthPixels
+            val height = realDm.heightPixels
+            captureSurfaceWidth = width
+            captureSurfaceHeight = height
+
+            reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+            virtualDisplay = projection!!.createVirtualDisplay(
+                "PokerCapture",
+                width,
+                height,
+                realDm.densityDpi,
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                reader!!.surface,
+                null,
+                null
+            )
+
+            reader!!.setOnImageAvailableListener({ r ->
+                val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
+                try {
+                    val plane = image.planes[0]
+                    val buffer = plane.buffer
+                    val pixelStride = plane.pixelStride
+                    val rowStride = plane.rowStride
+                    val rowPadding = rowStride - pixelStride * image.width
+
+                    val padded = Bitmap.createBitmap(
+                        image.width + rowPadding / pixelStride,
+                        image.height,
+                        Bitmap.Config.ARGB_8888
+                    )
+                    padded.copyPixelsFromBuffer(buffer)
+
+                    val clean = Bitmap.createBitmap(padded, 0, 0, image.width, image.height)
+                    padded.recycle()
+
+                    synchronized(latestFrameLock) {
+                        latestFrame?.recycle()
+                        latestFrame = clean
+                        latestFrameAtMs = System.currentTimeMillis()
+                    }
+                } finally {
+                    image.close()
+                }
+            }, null)
+
+            sendState("CAPTURE_READY")
+        } catch (e: SecurityException) {
+            sendError("Android blocked screen capture for security reasons", System.currentTimeMillis())
+        } catch (e: Exception) {
+            sendError(cleanError(e.message), System.currentTimeMillis())
         }
     }
 
-    private fun removeOverlayButton() {
-        overlayButton?.let { try { windowManager?.removeView(it) } catch (_: Exception) {} }
-        overlayButton = null
+    private fun analyzeLatestFrame() {
+        if (!analyzing.compareAndSet(false, true)) return
+
+        val capPressedAt = System.currentTimeMillis()
+        sendState("ANALYZING")
+
+        Thread {
+            var imageKb = 0
+            var httpCode = 0
+            try {
+                // Wait for a frame captured AFTER the CAP press. This avoids stale-frame analysis.
+                val freshDeadline = capPressedAt + 500L
+                var frame: Bitmap? = null
+                var frameAt = 0L
+                var freshFrame = false
+
+                while (System.currentTimeMillis() <= freshDeadline && frame == null) {
+                    synchronized(latestFrameLock) {
+                        if (latestFrame != null && latestFrameAtMs > capPressedAt) {
+                            frame = latestFrame!!.copy(Bitmap.Config.ARGB_8888, false)
+                            frameAt = latestFrameAtMs
+                            freshFrame = true
+                        }
+                    }
+                    if (frame == null) Thread.sleep(12)
+                }
+
+                // Fallback only if Android did not deliver a fresh frame in time; mark it clearly in debug.
+                if (frame == null) {
+                    synchronized(latestFrameLock) {
+                        frame = latestFrame?.copy(Bitmap.Config.ARGB_8888, false)
+                        frameAt = latestFrameAtMs
+                    }
+                }
+
+                val captured = frame
+                    ?: throw IllegalStateException("No captured frame. Screen capture is not active yet.")
+
+                val provider = "OPENAI"
+                val apiKey = ApiKeyStore.read(this)
+                    ?: throw IllegalStateException("OpenAI API key is missing")
+
+                val originalW = captured.width
+                val originalH = captured.height
+                val cropInfo = cropDescription(captured)
+                val region = cropPokerSide(captured)
+                captured.recycle()
+
+                val finalW = region.width
+                val finalH = region.height
+
+                // DEBUG BUILD: lossless PNG. These exact bytes are both previewed and sent to the API.
+                val encodeStarted = System.currentTimeMillis()
+                val imageBytes = encodePng(region)
+                region.recycle()
+                val encodeMs = System.currentTimeMillis() - encodeStarted
+
+                imageKb = ((imageBytes.size + 1023) / 1024).coerceAtLeast(1)
+                val imageSha = sha256(imageBytes)
+
+                // Save the EXACT bytes sent to the API for on-device visual verification.
+                File(cacheDir, "last_sent.png").writeBytes(imageBytes)
+
+                val prefs = getSharedPreferences("capture", MODE_PRIVATE)
+                prefs.edit()
+                    .putInt("api_request_count", prefs.getInt("api_request_count", 0) + 1)
+                    .putLong("api_last_request_at", System.currentTimeMillis())
+                    .apply()
+
+                sendState("SENDING", imageKb = imageKb)
+
+                val base64Image = Base64.encodeToString(imageBytes, Base64.NO_WRAP)
+                val imageData = "data:image/png;base64,$base64Image"
+                val content = JSONArray()
+                    .put(JSONObject().put("type", "input_text").put("text", POKER_PROMPT))
+                    .put(
+                        JSONObject()
+                            .put("type", "input_image")
+                            .put("image_url", imageData)
+                            .put("detail", "high")
+                    )
+
+                val body = JSONObject().apply {
+                    put("model", OPENAI_MODEL)
+                    put(
+                        "input",
+                        JSONArray().put(
+                            JSONObject()
+                                .put("role", "user")
+                                .put("content", content)
+                        )
+                    )
+                    put("reasoning", JSONObject().put("effort", "none"))
+                    put("max_output_tokens", 180)
+                }
+
+                val apiStarted = System.currentTimeMillis()
+                val apiResult = callOpenAi(apiKey, body.toString(), imageKb)
+                val apiMs = System.currentTimeMillis() - apiStarted
+                httpCode = apiResult.httpCode
+
+                if (apiResult.text.isBlank()) {
+                    throw IllegalStateException("EMPTY MODEL TEXT")
+                }
+
+                val parsed = parsePokerResult(apiResult.text)
+                val totalMs = System.currentTimeMillis() - capPressedAt
+                val frameAgeMs = (capPressedAt - frameAt).coerceAtLeast(0L)
+
+                val actionText = if (
+                    parsed.action == "BET" ||
+                    parsed.action == "RAISE" ||
+                    parsed.action == "CALL"
+                ) {
+                    if (parsed.size != "-" && parsed.size.isNotBlank()) {
+                        "${parsed.action} ${parsed.size}"
+                    } else {
+                        parsed.action
+                    }
+                } else {
+                    parsed.action
+                }
+
+                val metaParts = mutableListOf<String>()
+                if (parsed.hand != "?") metaParts += formatCards(parsed.hand)
+                if (parsed.position != "?") metaParts += formatPosition(parsed.position)
+                if (parsed.stack != "?") metaParts += parsed.stack
+                if (parsed.confidence.isNotBlank()) metaParts += parsed.confidence
+
+                val debugText = buildString {
+                    appendLine("PROMPT: $PROMPT_VERSION")
+                    appendLine("PROVIDER/MODEL: OpenAI / $OPENAI_MODEL")
+                    appendLine("FRESH FRAME: $freshFrame")
+                    appendLine("CAP pressed: $capPressedAt")
+                    appendLine("Frame time: $frameAt")
+                    appendLine("Frame age at CAP: ${frameAgeMs} ms")
+                    appendLine("App window metrics: ${appWindowWidth}x${appWindowHeight}")
+                    appendLine("Capture surface: ${captureSurfaceWidth}x${captureSurfaceHeight}")
+                    appendLine("Original frame: ${originalW}x${originalH}")
+                    appendLine("Crop: $cropInfo")
+                    appendLine("Final: ${finalW}x${finalH}")
+                    appendLine("FORMAT: PNG lossless")
+                    appendLine("Image: ${imageKb} KB")
+                    appendLine("SHA-256: $imageSha")
+                    appendLine("HTTP: $httpCode")
+                    appendLine("Request ID: ${apiResult.requestId.ifBlank { "—" }}")
+                    appendLine("Timing: encode=${encodeMs}ms api=${apiMs}ms total=${totalMs}ms")
+                    appendLine("RAW: ${apiResult.text}")
+                    appendLine("BUTTON: ${parsed.button}")
+                    appendLine("VISIBLE ACTION: ${parsed.visibleAction}")
+                    append("PARSED: action=${parsed.action}; size=${parsed.size}; pos=${parsed.position}; hand=${parsed.hand}; stack=${parsed.stack}; board=${parsed.board}; button=${parsed.button}; visible=${parsed.visibleAction}; strategy=${parsed.strategy}; confidence=${parsed.confidence}")
+                }
+
+                sendBroadcast(
+                    Intent(ACTION_ANALYSIS_UPDATE)
+                        .setPackage(packageName)
+                        .putExtra(EXTRA_STATE, "RESULT")
+                        .putExtra(EXTRA_ACTION_TEXT, actionText)
+                        .putExtra(EXTRA_META, metaParts.joinToString(" • "))
+                        .putExtra(EXTRA_LATENCY_MS, totalMs)
+                        .putExtra(EXTRA_IMAGE_KB, imageKb)
+                        .putExtra(EXTRA_HTTP_CODE, httpCode)
+                        .putExtra(EXTRA_BOARD, formatCards(parsed.board))
+                        .putExtra(EXTRA_STRATEGY, parsed.strategy)
+                        .putExtra(EXTRA_DEBUG, debugText)
+                        .putExtra(EXTRA_RAW, apiResult.text)
+                        .putExtra(EXTRA_REQUEST_ID, apiResult.requestId)
+                        .putExtra(EXTRA_IMAGE_SHA, imageSha)
+                        .putExtra(EXTRA_FRAME_AGE_MS, frameAgeMs)
+                        .putExtra(EXTRA_FRESH_FRAME, freshFrame)
+                        .putExtra(EXTRA_CROP_INFO, cropInfo)
+                        .putExtra(EXTRA_TIMING, "encode=${encodeMs}ms • api=${apiMs}ms • total=${totalMs}ms")
+                )
+            } catch (e: ApiHttpException) {
+                httpCode = e.httpCode
+                sendError(cleanError(e.message), capPressedAt, imageKb, httpCode)
+            } catch (e: SocketTimeoutException) {
+                sendError("API timeout — tap CAP again", capPressedAt, imageKb, httpCode)
+            } catch (e: Exception) {
+                sendError(cleanError(e.message), capPressedAt, imageKb, httpCode)
+            } finally {
+                analyzing.set(false)
+            }
+        }.start()
+    }
+
+    private fun cropPokerSide(bitmap: Bitmap): Bitmap {
+        val mode = getSharedPreferences("capture", MODE_PRIVATE)
+            .getString("crop_mode", "LEFT") ?: "LEFT"
+
+        return when (mode) {
+            "RIGHT" -> {
+                val x = bitmap.width / 3
+                val y = (bitmap.height * 0.15f).roundToInt()
+                val width = max(1, bitmap.width - x)
+                val height = max(1, (bitmap.height * 0.70f).roundToInt())
+                    .coerceAtMost(bitmap.height - y)
+                Bitmap.createBitmap(bitmap, x, y, width, height)
+            }
+            "TOP" -> Bitmap.createBitmap(
+                bitmap,
+                0,
+                0,
+                bitmap.width,
+                max(1, bitmap.height / 2)
+            )
+            "BOTTOM" -> Bitmap.createBitmap(
+                bitmap,
+                0,
+                bitmap.height / 2,
+                bitmap.width,
+                max(1, bitmap.height - bitmap.height / 2)
+            )
+            else -> Bitmap.createBitmap(
+                bitmap,
+                0,
+                0,
+                max(1, bitmap.width / 2),
+                bitmap.height
+            )
+        }
+    }
+
+    private fun cropDescription(bitmap: Bitmap): String {
+        val mode = getSharedPreferences("capture", MODE_PRIVATE)
+            .getString("crop_mode", "LEFT") ?: "LEFT"
+        return when (mode) {
+            "RIGHT" -> {
+                val x = bitmap.width / 3
+                val y = (bitmap.height * 0.15f).roundToInt()
+                val w = max(1, bitmap.width - x)
+                val h = max(1, (bitmap.height * 0.70f).roundToInt())
+                    .coerceAtMost(bitmap.height - y)
+                "RIGHT_2_3 x=$x y=$y w=$w h=$h"
+            }
+            "TOP" -> "TOP x=0 y=0 w=${bitmap.width} h=${max(1, bitmap.height / 2)}"
+            "BOTTOM" -> "BOTTOM x=0 y=${bitmap.height / 2} w=${bitmap.width} h=${max(1, bitmap.height - bitmap.height / 2)}"
+            else -> "LEFT x=0 y=0 w=${max(1, bitmap.width / 2)} h=${bitmap.height}"
+        }
+    }
+
+    private fun encodePng(bitmap: Bitmap): ByteArray =
+        ByteArrayOutputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+            out.toByteArray()
+        }
+
+    private fun sha256(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+
+    private fun encodeJpeg(bitmap: Bitmap, quality: Int): ByteArray =
+        ByteArrayOutputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+            out.toByteArray()
+        }
+
+    private fun resizeForVision(bitmap: Bitmap, targetMax: Int): Bitmap {
+        val maxDimension = max(bitmap.width, bitmap.height)
+        if (maxDimension <= targetMax) return bitmap
+
+        val scale = targetMax.toFloat() / maxDimension.toFloat()
+        return Bitmap.createScaledBitmap(
+            bitmap,
+            (bitmap.width * scale).roundToInt().coerceAtLeast(1),
+            (bitmap.height * scale).roundToInt().coerceAtLeast(1),
+            true
+        )
+    }
+
+    private data class ApiResult(
+        val text: String,
+        val httpCode: Int,
+        val requestId: String
+    )
+
+    private class ApiHttpException(
+        val httpCode: Int,
+        message: String
+    ) : Exception(message)
+
+    private fun callOpenAi(apiKey: String, json: String, imageKb: Int): ApiResult {
+        val connection =
+            (URL("https://api.openai.com/v1/responses").openConnection() as HttpURLConnection)
+
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 6000
+            connection.readTimeout = 14000
+            connection.doOutput = true
+            connection.setRequestProperty("Authorization", "Bearer $apiKey")
+            connection.setRequestProperty("Content-Type", "application/json")
+
+            connection.outputStream.use {
+                it.write(json.toByteArray(Charsets.UTF_8))
+                it.flush()
+            }
+
+            sendState("REQUEST_SENT", imageKb = imageKb)
+            sendState("WAITING_API", imageKb = imageKb)
+
+            val code = connection.responseCode
+            val stream =
+                if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+            if (code !in 200..299) {
+                val message = try {
+                    JSONObject(response)
+                        .optJSONObject("error")
+                        ?.optString("message")
+                        ?.takeIf { it.isNotBlank() }
+                } catch (_: Exception) {
+                    null
+                }
+                throw ApiHttpException(code, message ?: "OpenAI error HTTP $code")
+            }
+
+            val root = JSONObject(response)
+            return ApiResult(
+                text = extractOutputText(root),
+                httpCode = code,
+                requestId = connection.getHeaderField("x-request-id").orEmpty()
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun callGemini(apiKey: String, json: String, imageKb: Int): ApiResult {
+        val connection = (
+            URL("https://generativelanguage.googleapis.com/v1beta/models/$GEMINI_MODEL:generateContent")
+                .openConnection() as HttpURLConnection
+        )
+
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 6000
+            connection.readTimeout = 16000
+            connection.doOutput = true
+            connection.setRequestProperty("x-goog-api-key", apiKey)
+            connection.setRequestProperty("Content-Type", "application/json")
+
+            connection.outputStream.use {
+                it.write(json.toByteArray(Charsets.UTF_8))
+                it.flush()
+            }
+
+            sendState("REQUEST_SENT", imageKb = imageKb)
+            sendState("WAITING_API", imageKb = imageKb)
+
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val response = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+
+            if (code !in 200..299) {
+                val message = try {
+                    JSONObject(response)
+                        .optJSONObject("error")
+                        ?.optString("message")
+                        ?.takeIf { it.isNotBlank() }
+                } catch (_: Exception) {
+                    null
+                }
+                throw ApiHttpException(code, message ?: "Gemini error HTTP $code")
+            }
+
+            val root = JSONObject(response)
+            val candidates = root.optJSONArray("candidates")
+            val text = candidates
+                ?.optJSONObject(0)
+                ?.optJSONObject("content")
+                ?.optJSONArray("parts")
+                ?.let { parts ->
+                    buildString {
+                        for (i in 0 until parts.length()) {
+                            val t = parts.optJSONObject(i)?.optString("text").orEmpty()
+                            if (t.isNotBlank()) append(t)
+                        }
+                    }
+                }
+                .orEmpty()
+                .trim()
+
+            return ApiResult(text = text, httpCode = code, requestId = "")
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun extractOutputText(root: JSONObject): String {
+        val output = root.optJSONArray("output") ?: return ""
+        for (i in 0 until output.length()) {
+            val item = output.optJSONObject(i) ?: continue
+            if (item.optString("type") != "message") continue
+            val content = item.optJSONArray("content") ?: continue
+            for (j in 0 until content.length()) {
+                val part = content.optJSONObject(j) ?: continue
+                if (part.optString("type") == "output_text") {
+                    return part.optString("text").trim()
+                }
+            }
+        }
+        return ""
+    }
+
+    private data class PokerResult(
+        val action: String,
+        val size: String,
+        val position: String,
+        val hand: String,
+        val stack: String,
+        val board: String,
+        val button: String,
+        val visibleAction: String,
+        val strategy: String,
+        val confidence: String
+    )
+
+    private fun parsePokerResult(raw: String): PokerResult {
+        val line = raw
+            .lineSequence()
+            .firstOrNull { it.contains("|") }
+            ?.trim()
+            .orEmpty()
+
+        val p = line.split("|").map { it.trim() }
+        if (p.size < 10) {
+            return PokerResult("UNCLEAR", "-", "?", "?", "?", "?", "?", "?", "Need clearer read", "LOW")
+        }
+
+        val allowed = setOf("FOLD", "CHECK", "CALL", "BET", "RAISE", "ALL-IN", "UNCLEAR")
+        val action = p[0].uppercase().let { if (it in allowed) it else "UNCLEAR" }
+
+        // Basic structural sanity checks: two hole cards; board can only be preflop/3/4/5 cards.
+        val cardRegex = Regex("([2-9TJQKA])([cdhs])", RegexOption.IGNORE_CASE)
+        val handRaw = p[3].replace("10", "T").replace(" ", "")
+        val handCount = cardRegex.findAll(handRaw).count()
+        val hand = if (p[3] == "?" || handCount == 2) p[3] else "?"
+
+        val boardRaw = p[5].replace("10", "T").replace(" ", "")
+        val boardCount = cardRegex.findAll(boardRaw).count()
+        val board = when {
+            p[5].equals("PREFLOP", true) -> "PREFLOP"
+            p[5] == "?" -> "?"
+            boardCount in setOf(3, 4, 5) -> p[5]
+            else -> "?"
+        }
+
+        return PokerResult(
+            action = action,
+            size = p[1],
+            position = p[2],
+            hand = hand,
+            stack = p[4],
+            board = board,
+            button = p[6],
+            visibleAction = p[7],
+            strategy = p[8],
+            confidence = p[9].uppercase()
+        )
+    }
+
+    private fun formatCards(raw: String): String {
+        if (raw == "?" || raw.equals("PREFLOP", true)) return raw.uppercase()
+        val normalized = raw.replace("10", "T").replace(" ", "")
+        val cardRegex = Regex("([2-9TJQKA])([cdhs])", RegexOption.IGNORE_CASE)
+        val cards = cardRegex.findAll(normalized).map { m ->
+            val rank = m.groupValues[1].uppercase()
+            val suit = when (m.groupValues[2].lowercase()) {
+                "c" -> "♣"
+                "d" -> "♦"
+                "h" -> "♥"
+                "s" -> "♠"
+                else -> ""
+            }
+            rank + suit
+        }.toList()
+        return if (cards.isNotEmpty()) cards.joinToString(" ") else raw
+    }
+
+    private fun formatPosition(raw: String): String = when (raw.trim().uppercase()) {
+        "BTN", "BUTTON" -> "BUTTON"
+        "SB" -> "SMALL BLIND"
+        "BB" -> "BIG BLIND"
+        "UTG" -> "UNDER THE GUN"
+        "HJ" -> "HIJACK"
+        "CO" -> "CUTOFF"
+        "BTN/SB", "SB/BTN" -> "BUTTON / SMALL BLIND"
+        else -> raw
+    }
+
+    private fun sendState(
+        state: String,
+        imageKb: Int = 0,
+        httpCode: Int = 0
+    ) {
+        sendBroadcast(
+            Intent(ACTION_ANALYSIS_UPDATE)
+                .setPackage(packageName)
+                .putExtra(EXTRA_STATE, state)
+                .putExtra(EXTRA_IMAGE_KB, imageKb)
+                .putExtra(EXTRA_HTTP_CODE, httpCode)
+        )
+    }
+
+    private fun sendError(
+        message: String,
+        started: Long,
+        imageKb: Int = 0,
+        httpCode: Int = 0
+    ) {
+        sendBroadcast(
+            Intent(ACTION_ANALYSIS_UPDATE)
+                .setPackage(packageName)
+                .putExtra(EXTRA_STATE, "ERROR")
+                .putExtra(EXTRA_ERROR, message)
+                .putExtra(EXTRA_LATENCY_MS, System.currentTimeMillis() - started)
+                .putExtra(EXTRA_IMAGE_KB, imageKb)
+                .putExtra(EXTRA_HTTP_CODE, httpCode)
+        )
+    }
+
+    private fun cleanError(message: String?): String {
+        if (message.isNullOrBlank()) return "Request failed"
+        return message
+            .replace(Regex("sk-[A-Za-z0-9_-]+"), "sk-***")
+            .take(180)
     }
 
     private fun stopCapture() {
-        synchronized(latestFrameLock) { latestFrame?.recycle(); latestFrame = null }
-        reader?.close(); reader = null
-        projectionCallback?.let { callback -> projection?.unregisterCallback(callback) }
+        synchronized(latestFrameLock) {
+            latestFrame?.recycle()
+            latestFrame = null
+            latestFrameAtMs = 0L
+        }
+        reader?.close()
+        reader = null
+        virtualDisplay?.release()
+        virtualDisplay = null
+
+        projectionCallback?.let { callback ->
+            try {
+                projection?.unregisterCallback(callback)
+            } catch (_: Exception) {
+            }
+        }
         projectionCallback = null
-        projection?.stop(); projection = null
+
+        try {
+            projection?.stop()
+        } catch (_: Exception) {
+        }
+        projection = null
     }
+
     override fun onDestroy() {
-        removeOverlayButton(); stopScreenshotWatcher(); stopCapture(); super.onDestroy() }
-    private fun startScreenshotWatcher() {
-        if (screenshotObserver != null) return
-        screenshotObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean, uri: Uri?) {
-                super.onChange(selfChange, uri)
-                shareLatestScreenshotToChatGPT()
-            }
-        }
-        contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, screenshotObserver!!)
-    }
-
-    private fun stopScreenshotWatcher() {
-        screenshotObserver?.let { try { contentResolver.unregisterContentObserver(it) } catch (_: Exception) {} }
-        screenshotObserver = null
-    }
-
-    private fun shareLatestScreenshotToChatGPT() {
-        val projectionCols = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.RELATIVE_PATH)
-        contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projectionCols, null, null, MediaStore.Images.Media.DATE_ADDED + " DESC")?.use { cur ->
-            if (!cur.moveToFirst()) return
-            val id = cur.getLong(0)
-            val name = cur.getString(1) ?: ""
-            val rel = cur.getString(2) ?: ""
-            if (id == lastScreenshotId || (!name.contains("screenshot", true) && !rel.contains("screenshot", true))) return
-            lastScreenshotId = id
-            val imageUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "image/*"
-                putExtra(Intent.EXTRA_STREAM, imageUri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                setPackage(selectedAiPackage())
-            }
-            val pending = PendingIntent.getActivity(
-                this, id.toInt(), send,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val notification = NotificationCompat.Builder(this, CHANNEL)
-                .setSmallIcon(android.R.drawable.ic_menu_share)
-                .setContentTitle("Screenshot ready")
-                .setContentText("Tap to send to " + selectedAiLabel())
-                .setContentIntent(pending)
-                .setAutoCancel(true)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .build()
-            getSystemService(NotificationManager::class.java).notify(1001, notification)
-        }
+        stopCapture()
+        super.onDestroy()
     }
 }

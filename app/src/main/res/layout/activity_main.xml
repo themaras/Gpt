@@ -123,6 +123,56 @@
             <RadioButton android:id="@+id/cropBottom" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Bottom" />
         </RadioGroup>
 
+        <CheckBox
+            android:id="@+id/debugToggle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="DEBUG"
+            android:checked="true"
+            android:layout_marginTop="8dp" />
+
+        <LinearLayout
+            android:id="@+id/debugPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="visible">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="EXACT IMAGE SENT TO API"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:textSize="12sp"
+                android:layout_marginTop="6dp" />
+
+            <ImageView
+                android:id="@+id/debugPreview"
+                android:layout_width="match_parent"
+                android:layout_height="180dp"
+                android:scaleType="fitCenter"
+                android:adjustViewBounds="true"
+                android:contentDescription="Exact image sent to API"
+                android:background="#111111" />
+
+            <TextView
+                android:id="@+id/debugText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Debug data will appear here after CAP."
+                android:textSize="11sp"
+                android:typeface="monospace"
+                android:textIsSelectable="true"
+                android:padding="6dp" />
+
+            <Button
+                android:id="@+id/saveDebugButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="SAVE DEBUG SNAPSHOT" />
+        </LinearLayout>
+
         <Button
             android:id="@+id/startButton"
             android:layout_width="match_parent"

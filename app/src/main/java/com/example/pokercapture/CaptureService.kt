@@ -61,7 +61,7 @@ class CaptureService : Service() {
         private const val CHANNEL = "capture"
         private const val OPENAI_MODEL = "gpt-5.6-luna"
         private const val GEMINI_MODEL = "gemini-3.8-flash"
-        private const val PROMPT_VERSION = "debug_v3_perception_lock"
+        private const val PROMPT_VERSION = "debug_v4_button_anchor"
 
         private const val POKER_PROMPT = """Analyze this low-stakes NL Hold'em tournament screenshot.
 
@@ -78,9 +78,14 @@ PASS 1 — READ THE SCREEN ONLY:
    - 4 = TURN
    - 5 = RIVER
    Never invent missing community cards.
-3. Find the real PokerStars dealer/button marker: the small red/white circular marker with a spade symbol next to a player.
+3. Find the real PokerStars dealer/button marker: the small red/white circular marker with a spade symbol.
+   IMPORTANT: first locate the marker itself by its red/white circular spade appearance, THEN assign it to the NEAREST player name/seat.
+   Do not assign BUTTON based on table order, stack chips, avatars, card backs, or where you expect the button to be.
+   If two seats are similarly close or the marker is ambiguous, BUTTON=?.
 4. Determine which seats are ACTUALLY dealt into the current hand. Card backs/face-up cards are evidence of participation.
-5. Read the visible current action facing Hero, including CHECK/FOLD/CALL/BET/RAISE and amount when clearly visible.
+5. Read the current action facing Hero ONLY from explicit action labels/chips/text that are visible on the table.
+   Examples of valid VISIBLE_ACTION: CHECK, CALL 400, BET 600, RAISE 1600, NONE.
+   "BETTING OPTIONS", "buttons visible", "action available", or UI control labels are NOT opponent actions and must never be returned.
 6. Read Hero stack and blinds only if legible.
 
 POKERSTARS 4-COLOR DECK — HARD RULE:
@@ -106,7 +111,13 @@ SPECIAL JOIN/WAITING RULE:
 Hero may have just joined the table, posted out of turn, be waiting for the big blind, be sitting out, or not yet be part of the normal rotation.
 If Hero is not clearly dealt into the current hand, or the table state makes normal positional rotation uncertain, POSITION=?.
 Do NOT force BB/SB merely because Hero posted chips or is seated near a blind location.
-If the dealer marker is not reliable, POSITION=?.
+If BUTTON=? then POSITION=?.
+If BUTTON is identified but dealt-in seats are not clear enough to count reliably, POSITION=?.
+
+POSITION DERIVATION CHECK:
+Before outputting POSITION, verify that BUTTON points to the seat physically nearest the red/white spade marker.
+Then walk clockwise through ONLY the dealt-in seats.
+If this geometric walk conflicts with the guessed position, output POSITION=? rather than guessing.
 
 PASS 2 — DECIDE:
 Only after PASS 1 is internally consistent, choose the poker action.
@@ -123,8 +134,8 @@ POSITION: BTN,SB,BB,UTG,HJ,CO or ?.
 HAND: exactly two compact cards, e.g. Td9h, or ?.
 STACK: effective stack in BB if reliable, otherwise ?.
 BOARD: compact board with exactly 0,3,4,or5 cards; use PREFLOP for 0, or ? if unreadable.
-BUTTON: username/seat label nearest the real dealer marker, or ?.
-VISIBLE_ACTION: concise verified action facing Hero, e.g. CHECK, CALL 200, BET 800, RAISE 1600, NONE, or ?.
+BUTTON: username/seat label nearest the real red/white spade dealer marker, or ?.
+VISIBLE_ACTION: concise verified opponent/current action facing Hero, e.g. CHECK, CALL 200, BET 800, RAISE 1600, NONE, or ?. Never output UI labels such as BETTING OPTIONS.
 STRATEGY: maximum 6 words.
 CONFIDENCE: HIGH,MEDIUM,LOW.
 No explanation beyond that one line."""
